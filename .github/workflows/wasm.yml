@@ -111,14 +111,15 @@ jobs:
           path: dist/payload
           if-no-files-found: error
 
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist/web
 
-  # Publish main's build to GitHub Pages (Settings → Pages → Source: GitHub Actions).
+  # Publish main's build to GitHub Pages (Settings → Pages → Source: GitHub Actions). Runs on
+  # every push to main, and from Actions → wasm → Run workflow on main to republish by hand.
   pages:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: web
     runs-on: ubuntu-24.04
     permissions:
