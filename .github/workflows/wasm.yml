@@ -1,0 +1,108 @@
+# P0 task 0.1: build upstream's web app (apps/designcraft-web) for wasm32 with upstream's own
+# settings, measure its payload (0.2) and upload a ready-to-serve static site.
+#
+# Upstream builds the web app with Trunk (apps/designcraft-web/Trunk.toml and index.html):
+# `cargo build --release`, wasm-bindgen `--target web` with weak refs, then `wasm-opt -Oz`. These
+# steps run the same three tools explicitly so every version is pinned and visible. The web build
+# is a stand-in to measure; our shell (P1) drops the egui UI, so these numbers are a ceiling.
+name: wasm
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: wasm-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: "1.97.0"
+  BINARYEN_VERSION: "123"
+  BINARYEN_SHA256: e959f2170af4c20c552e9de3a0253704d6a9d2766e8fdb88e4d6ac4bae9388fe
+  CARGO_TERM_COLOR: always
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_TOOLCHAIN"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-web
+
+      # The wasm-bindgen CLI must match the wasm-bindgen crate in Cargo.lock exactly.
+      - name: wasm-bindgen version from Cargo.lock
+        id: versions
+        run: |
+          v=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+          [ -n "$v" ] || { echo "wasm-bindgen not found in Cargo.lock" >&2; exit 1; }
+          echo "wasm_bindgen=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.versions.outputs.wasm_bindgen }}
+
+      - name: Install binaryen (wasm-opt) and brotli
+        run: |
+          tarball="binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/$tarball"
+          echo "$BINARYEN_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends brotli
+
+      - name: Build (cargo, release)
+        run: cargo build --locked --release --target wasm32-unknown-unknown -p designcraft-web --bin designcraft-web
+
+      - name: wasm-bindgen (--target web, weak refs, as Trunk's data-weak-refs)
+        run: |
+          wasm-bindgen --version
+          wasm-bindgen target/wasm32-unknown-unknown/release/designcraft-web.wasm \
+            --out-dir dist/web --target web --weak-refs --no-typescript
+
+      - name: wasm-opt -Oz (as Trunk's data-wasm-opt="z")
+        run: |
+          wasm-opt --version
+          wasm-opt -Oz \
+            --enable-bulk-memory --enable-multivalue --enable-mutable-globals \
+            --enable-nontrapping-float-to-int --enable-reference-types --enable-sign-ext \
+            dist/web/designcraft-web_bg.wasm -o dist/web/designcraft-web_bg.opt.wasm
+          mv dist/web/designcraft-web_bg.opt.wasm dist/web/designcraft-web_bg.wasm
+
+      # Upstream's index.html with the Trunk directive replaced by the module script Trunk would
+      # inject. Relative URLs, so the site works under any path (Pages included).
+      - name: index.html
+        run: |
+          script='<script type="module">import init from "./designcraft-web.js"; init({ module_or_path: "./designcraft-web_bg.wasm" });</script>'
+          grep -q 'data-trunk rel="rust"' apps/designcraft-web/index.html
+          sed "s#^ *<link data-trunk rel=\"rust\".*#  ${script}#" apps/designcraft-web/index.html > dist/web/index.html
+          ! grep -q 'data-trunk' dist/web/index.html
+
+      - name: Measure payload (0.2)
+        run: bash .github/scripts/wasm-payload.sh dist/web dist/payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: designcraft-web-${{ github.sha }}
+          path: dist/web
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: payload-${{ github.sha }}
+          path: dist/payload
+          if-no-files-found: error
