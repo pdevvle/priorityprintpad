@@ -25,6 +25,9 @@ env:
   BINARYEN_VERSION: "123"
   BINARYEN_SHA256: e959f2170af4c20c552e9de3a0253704d6a9d2766e8fdb88e4d6ac4bae9388fe
   CARGO_TERM_COLOR: always
+  # The commit the build is of: the PR head on pull requests (github.sha is then a temporary
+  # merge commit), the pushed commit otherwise.
+  BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   web:
@@ -97,12 +100,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: designcraft-web-${{ github.sha }}
+          name: designcraft-web-${{ env.BUILD_SHA }}
           path: dist/web
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:
-          name: payload-${{ github.sha }}
+          name: payload-${{ env.BUILD_SHA }}
           path: dist/payload
           if-no-files-found: error

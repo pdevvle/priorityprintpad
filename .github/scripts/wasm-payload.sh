@@ -35,7 +35,7 @@ for f in $fonts; do
 done
 
 total_br=$((w_br + j_br))
-sha=${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD)}
+sha=${BUILD_SHA:-${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD)}}
 date=$(date -u +%Y-%m-%d)
 
 cat >"$OUT/payload.md" <<EOF
