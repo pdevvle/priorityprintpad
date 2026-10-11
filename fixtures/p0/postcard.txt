@@ -1,0 +1,44 @@
+# P0 task 0.4: a 9" x 6" postcard, two sides, 0.125" bleed, with text, a placed image and CMYK
+# shapes, built headless and exported to PDF:
+#
+#   designcraft-cli script fixtures/p0/postcard.txt     (from the repo root; writes fixtures/p0/postcard.pdf)
+#
+# Units are points (72 per inch). Page coordinates run from the trim's top-left corner, so the
+# bleed is the 9 pt outside [0, 0, 648, 432].
+#
+# The step numbers in the $N references below count from 0 and skip these comment lines.
+
+# 0: the document
+file.new {"width":648,"height":432,"pages":2,"facingPages":false,"bleed":9,"margins":18,"title":"P0 postcard"}
+
+# Front (spread 0)
+# 1-3: full-bleed photo; red marker square at the image's top-left
+frame.create {"spread":0,"rect":[-9,-9,657,441],"content":"graphic"}
+file.place {"path":"fixtures/p0/photo.jpg","frame":"$1.id"}
+object.fit {"mode":"fillProportionally","ids":["$1.id"]}
+# 4-5: a CMYK band across the bottom, bleeding off three edges
+frame.create {"spread":0,"rect":[-9,336,657,441],"content":"unassigned"}
+object.color {"color":{"c":0,"m":80,"y":95,"k":0},"ids":["$4.id"]}
+# 6-8: the headline, white on the band
+frame.create {"spread":0,"rect":[36,352,612,412],"content":"text","text":"Priority Print Service"}
+selection.set {"ids":["$6.id"]}
+type.char {"attrs":{"fontFamily":"Source Sans 3","fontStyle":"Bold","size":40,"fill":"[Paper]"}}
+
+# Back (spread 1)
+# 9-10: a CMYK panel on the left, bleeding off three edges
+frame.create {"spread":1,"rect":[-9,-9,288,441],"content":"unassigned"}
+object.color {"color":{"c":100,"m":45,"y":0,"k":20},"ids":["$9.id"]}
+# 11-13: white text on the panel
+frame.create {"spread":1,"rect":[36,36,252,200],"content":"text","text":"Designed online. Printed by people who check every file."}
+selection.set {"ids":["$11.id"]}
+type.char {"attrs":{"fontFamily":"Source Serif 4","fontStyle":"Semibold","size":20,"fill":"[Paper]"}}
+# 14-16: black body text on the right, inside the safety area
+frame.create {"spread":1,"rect":[324,36,612,180],"content":"text","text":"P0 test postcard. 9 x 6 in, 0.125 in bleed. Text, a placed image and CMYK shapes, exported by DesignCraft without a browser."}
+selection.set {"ids":["$14.id"]}
+type.char {"attrs":{"fontFamily":"Source Sans 3","fontStyle":"Regular","size":12,"fill":"[Black]"}}
+# 17-18: a 100% K rule above the address area
+frame.create {"spread":1,"rect":[324,250,612,252],"content":"unassigned"}
+object.color {"color":{"c":0,"m":0,"y":0,"k":100},"ids":["$17.id"]}
+
+# 19: the print PDF: document bleed, PDF/X-4 with the built-in output intent (brief §3.3)
+file.exportPdf {"path":"fixtures/p0/postcard.pdf","bleed":true,"standard":"x4"}
