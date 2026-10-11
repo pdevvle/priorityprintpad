@@ -23,6 +23,9 @@ prices, uploads or touches the cart.
   upstream's public API.
 - `shell/`: our editor UI, `designer.html` + plain JS (P1).
 - `.github/workflows/wasm.yml`: the P0 wasm build and payload measurement.
+- Upstream's FreeBSD and Windows ARM64 workflows are removed: they package desktop builds we don't
+  ship, and FreeBSD needs a larger runner than this account has. Keep them deleted when merging
+  upstream. `release.yml` (runs only on a `release` branch) and `packaging-lint.yml` stay.
 - `upstream` remote: `https://github.com/storytold/designcraft`, seeded at `ca343e8`.
 
 ## Rules
