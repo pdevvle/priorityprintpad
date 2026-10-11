@@ -43,3 +43,11 @@ Rust dependencies (vello_cpu, kurbo, skrifa, harfrust, image, egui, eframe, …)
 licensed (MIT/Apache-2.0/BSD/ISC/Zlib) and fetched through crates.io.
 
 No Adobe icons, images or artwork are included.
+
+PPS Designer
+
+PPS Designer is a modified version of DesignCraft, made for Priority Print Service. Modifications
+copyright (c) 2026 Priority Print Service, under the same MIT OR Apache-2.0 terms. As the ArtCraft
+brand licence requires of modified versions, the ArtCraft marks (docs/brand/, the README wordmark
+and the mark drawn in the About window and start screen) have been removed. PPS Designer is not an
+ArtCraft product and is not endorsed by the ArtCraft Team.
