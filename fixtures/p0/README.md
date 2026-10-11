@@ -23,6 +23,14 @@ with the site served brotli-compressed. Download is most of it: 2.4 s of 2.9 s o
 These numbers are for upstream's whole egui application, the stand-in the brief uses for P0.
 Our shell (P1) drops the egui UI, so they are a ceiling.
 
+**How low the floor is.** A throwaway build of the engine, renderer and PDF export with no egui
+(a `wasm-bindgen` wrapper over `Session::execute` and `Renderer::render_page`, the shape
+`pps-bridge` will have; not committed) came to 24.80 MiB raw and **6.33 MiB brotli** after the same
+`wasm-opt -Oz`, against 8.96 MiB for the full app: dropping the UI saves about 30%. Most of the
+size is the engine itself (IDML, EPUB, text import, image codecs and the embedded fonts all come
+in through `designcraft-engine`). At 6.33 MiB the download alone is about 6 s on good 4G and about
+33 s on slow 4G, before the phone compiles the code.
+
 ## The test postcard (0.4)
 
 `postcard.txt` is a `designcraft-cli` script; `postcard.pdf` is its output, committed as built.
