@@ -288,9 +288,11 @@ function draw() {
   ctx.lineWidth = 1.5;
   ctx.setLineDash([2, 3]); ctx.strokeStyle = '#e04444'; ctx.strokeRect(1, 1, cw - 2, ch - 2);
   ctx.setLineDash([]); ctx.strokeStyle = '#222'; ctx.strokeRect(px(0), px(0), w * S.k, h * S.k);
-  ctx.setLineDash([6, 4]); ctx.strokeStyle = '#1f9d55';
-  ctx.strokeRect(px(safety), px(safety), (w - 2 * safety) * S.k, (h - 2 * safety) * S.k);
-  ctx.setLineDash([]);
+  // The safe line on a white underlay, so it reads on any background colour (green on teal didn't).
+  const safeRect = [px(safety), px(safety), (w - 2 * safety) * S.k, (h - 2 * safety) * S.k];
+  ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.strokeRect(...safeRect);
+  ctx.lineWidth = 1.75; ctx.setLineDash([6, 4]); ctx.strokeStyle = '#13843f'; ctx.strokeRect(...safeRect);
+  ctx.setLineDash([]); ctx.lineWidth = 1.5;
 
   for (const it of S.items) if (problemsOf(it).length) {
     const r = itemRect(it);
