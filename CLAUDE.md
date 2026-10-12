@@ -32,6 +32,11 @@ prices, uploads or touches the cart.
   ship, and FreeBSD needs a larger runner than this account has. Keep them deleted when merging
   upstream. `release.yml` (runs only on a `release` branch) and `packaging-lint.yml` stay.
 - `upstream` remote: `https://github.com/storytold/designcraft`, seeded at `ca343e8`.
+- `.github/workflows/upstream-sync.yml` + `.github/scripts/upstream-merge.sh`: every Monday (or Run
+  workflow) upstream's main is merged into an `upstream-sync/<sha>` branch, the standing conflicts
+  answered (deleted workflows and brand files stay deleted, Cargo.lock is upstream's plus ours,
+  README/CLAUDE.md ours), the ArtCraft mark guarded against, the wasm build and e2e started, and a
+  draft PR opened. Anything else stops with the files named. Merging the PR stays deliberate.
 
 ## Rules
 
