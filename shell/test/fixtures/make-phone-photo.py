@@ -1,7 +1,8 @@
-"""Builds phone-exif6.jpg for shell/test/designer.e2e.mjs: a 300 x 200 picture (red top-left
+"""Builds phone-exif6.jpg and print-cmyk.jpg for shell/test/designer.e2e.mjs: a 300 x 200 picture (red top-left
 quarter, blue bottom-right) stored the way a phone stores a photo taken upright, as the pixels
 turned a quarter left plus EXIF Orientation 6 saying to turn them back. Placed without the turn,
-it prints sideways.
+it prints sideways. print-cmyk.jpg is the same picture saved as a CMYK JPEG, as a print-ready
+export from Photoshop is.
 
     python3 shell/test/fixtures/make-phone-photo.py      (from the repo root; needs Pillow)
 """
@@ -13,3 +14,4 @@ shown.paste((20, 40, 220), (150, 100, 300, 200))
 exif = Image.Exif()
 exif[274] = 6
 shown.rotate(90, expand=True).save('shell/test/fixtures/phone-exif6.jpg', quality=92, exif=exif.tobytes())
+shown.convert('CMYK').save('shell/test/fixtures/print-cmyk.jpg', quality=90)

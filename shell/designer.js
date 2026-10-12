@@ -126,7 +126,15 @@ function tryRun(command, params, failMsg) {
 function changed() {
   S.dirty = true;
   S.canRedo = false;
+  S.editStamp = (S.editStamp || 0) + 1;
   refresh();
+}
+
+// The engine keeps every document it opens. A new or reopened one replaces the one before (the
+// designer only ever shows one), so memory doesn't grow with every Edit design, file or resize:
+// the documents before `index`, the new one, are closed.
+function keepOnly(index) {
+  for (let i = 0; i < (Number(index) || 0); i++) tryRun('file.close', { index: 0 });
 }
 
 // ── loading ───────────────────────────────────────────────────
@@ -187,6 +195,9 @@ function validSpec(spec) {
   if (!n(spec.trimW) || !n(spec.trimH) || spec.trimW <= 0 || spec.trimH <= 0 || spec.trimW > 5000 || spec.trimH > 5000) return 'trim size';
   if (spec.bleed != null && (!n(spec.bleed) || spec.bleed < 0 || spec.bleed > 72)) return 'bleed';
   if (spec.safety != null && (!n(spec.safety) || spec.safety < 0 || spec.safety > 144)) return 'safety';
+  // Points: a card under half an inch is a spec sent in inches by mistake, not a product.
+  if (spec.trimW < 36 || spec.trimH < 36) return 'trim size (under half an inch: is it in points?)';
+  if (spec.safety != null && spec.safety * 2 >= Math.min(spec.trimW, spec.trimH)) return 'safety';
   if (!Number.isInteger(spec.pages) || spec.pages < 1 || spec.pages > 64) return 'pages';
   if (spec.pageMultiple != null && (!Number.isInteger(spec.pageMultiple) || spec.pageMultiple < 1 || spec.pages % spec.pageMultiple)) return 'page multiple';
   for (const k of ['folds', 'perfs']) {
@@ -217,6 +228,7 @@ const linesOn = (k, page) => (S.spec[k] || []).filter(g => g.page === page);
 
 function resetLocalState() {
   S.style.clear(); S.colour.clear(); S.imagePx.clear(); S.swatchNames.clear(); S.sel = null; S.page = 0;
+  clearTimeout(textTimer); textTimer = 0; S.editId = null; el.textEditor.hidden = true;
 }
 
 function startJob(job) {
@@ -225,15 +237,16 @@ function startJob(job) {
   const sp = job.spec;
   S.spec = { w: sp.trimW, h: sp.trimH, bleed: sp.bleed ?? 9, safety: sp.safety ?? 9, pages: sp.pages, ...specGuides(sp) };
   resetLocalState();
-  let opened = false;
+  let opened = false, lostDesign = false;
   if (typeof job.design === 'string' && job.design) {
-    try { S.d.openDesign(job.design); opened = true; }
-    catch (e) { console.warn('saved design could not be reopened; starting fresh', e); }
+    try { keepOnly(JSON.parse(S.d.openDesign(job.design)).index); opened = true; }
+    catch (e) { console.warn('saved design could not be reopened; starting fresh', e); lostDesign = true; }
   }
   if (!opened) {
-    run('file.new', { width: S.spec.w, height: S.spec.h, pages: S.spec.pages, facingPages: false,
-      bleed: S.spec.bleed, margins: S.spec.safety, title: el.productName.textContent });
+    keepOnly(run('file.new', { width: S.spec.w, height: S.spec.h, pages: S.spec.pages, facingPages: false,
+      bleed: S.spec.bleed, margins: S.spec.safety, title: el.productName.textContent }).index);
   }
+  S.resizeBase = null;
   const inches = v => +(v / 72).toFixed(3);
   el.productSize.textContent = inches(S.spec.w) + ' × ' + inches(S.spec.h) + ' in';
   buildSides();
@@ -249,18 +262,23 @@ function startJob(job) {
     const fits = (a, b) => Math.abs(a - b) < 0.01;
     if (!fits(st.pageWidth, S.spec.w) || !fits(st.pageHeight, S.spec.h) || ins.pageCount !== S.spec.pages) {
       const want = S.spec;
+      const dropped = (ins.spreads || []).slice(want.pages).some(sp => (sp.items || []).length);
       S.spec = { ...want, w: st.pageWidth, h: st.pageHeight, pages: ins.pageCount };
-      try { resizeDocument(want); }
+      try {
+        resizeDocument(want);
+        if (dropped) toast('This order now prints ' + (want.pages === 1 ? 'one side' : want.pages + ' sides') + ', so the rest of your earlier design was left out. Change the order back to keep it.', 9000);
+      }
       catch (e) {
         console.error(e);
         S.spec = want;
-        run('file.new', { width: want.w, height: want.h, pages: want.pages, facingPages: false, bleed: want.bleed, margins: want.safety, title: el.productName.textContent });
+        keepOnly(run('file.new', { width: want.w, height: want.h, pages: want.pages, facingPages: false, bleed: want.bleed, margins: want.safety, title: el.productName.textContent }).index);
         S.dirty = false;
         toast('Your earlier design was made for a different size and could not be resized, so this is a fresh start.', 8000);
       }
     }
   }
   layout();
+  if (lostDesign) toast('Your earlier design couldn\'t be reopened, so this is a fresh start. Sorry about that.', 9000);
 }
 
 function demoJob() {
@@ -307,7 +325,12 @@ function showPrice(m) {
     S.price = { total: t, qty: Number.isInteger(m.qty) ? m.qty : null, turnaround: m.turnaround };
     el.price.textContent = '$' + t.toFixed(2) + (S.price.qty != null ? ' · ' + S.price.qty.toLocaleString() + ' pcs' : '');
     el.price.hidden = false;
-  } else { S.price = null; el.price.hidden = true; }
+    S.priceError = null;
+  } else {
+    S.price = null; el.price.hidden = true;
+    // The calculator can't price the job as it stands (a panel too small, a size too big).
+    S.priceError = m && typeof m.error === 'string' && m.error ? m.error.slice(0, 200) : null;
+  }
   renderOrderPrice();
 }
 
@@ -377,7 +400,10 @@ function readDocument() {
 }
 
 function renderPage() {
-  const scale = Math.min(6, Math.max(0.05, S.k * S.dpr));
+  // The engine draws at most 40 million pixels; a poster zoomed in asks for more, and was left
+  // showing the old picture. Past that the canvas is drawn a little softer instead.
+  const area = (S.spec.w + 2 * S.spec.bleed) * (S.spec.h + 2 * S.spec.bleed);
+  const scale = Math.min(6, Math.sqrt(38e6 / area), Math.max(0.05, S.k * S.dpr));
   let p;
   try { p = S.d.renderPage(S.page, scale, true); }
   catch (e) { console.error(e); toast('The preview could not be drawn.'); return; }
@@ -523,7 +549,9 @@ function background() { return S.items.find(isBackground) || null; }
 // and the button says "Print anyway".
 const OVERSET_MSG = 'Some words don\'t fit in their box and won\'t print. Make the box bigger or the words smaller.';
 const OFFCARD_MSG = 'Something is off the edge of the card and won\'t print. Drag it back on, or delete it.';
-const SEVERE = new Set([OVERSET_MSG, OFFCARD_MSG]);
+const TEXT_EDGE_MSG = 'Some words run past the edge of the card and will be cut off. Move them in, or make them smaller.';
+const FADED_TIGHT_MSG = 'Faded text with tight letter spacing loses part of its last letter when printed. Set the letter spacing to 0 or more, or the opacity to 100%.';
+const SEVERE = new Set([OVERSET_MSG, OFFCARD_MSG, TEXT_EDGE_MSG, FADED_TIGHT_MSG]);
 
 function problemsOf(it) {
   const out = [];
@@ -531,10 +559,20 @@ function problemsOf(it) {
   const [x0, y0, x1, y1] = it.bounds;
   if (x1 <= -bleed || y1 <= -bleed || x0 >= w + bleed || y0 >= h + bleed) return [OFFCARD_MSG];
   if (isText(it)) {
-    if (x0 < safety - 0.5 || y0 < safety - 0.5 || x1 > w - safety + 0.5 || y1 > h - safety + 0.5)
+    // A text box crossing the cut has words the knife takes; inside the cut but past the green
+    // line, words that may be nicked.
+    if (x0 < -0.5 || y0 < -0.5 || x1 > w + 0.5 || y1 > h + 0.5) out.push(TEXT_EDGE_MSG);
+    else if (x0 < safety - 0.5 || y0 < safety - 0.5 || x1 > w - safety + 0.5 || y1 > h - safety + 0.5)
       out.push('Some words are outside the green dashed line and could be cut off.');
     const st = S.stories.get(it.story);
     if (st && st.overset) out.push(OVERSET_MSG);
+    // The engine's PDF clips a see-through text frame's group to a box that misses the last
+    // letter's overhang when tracking is negative (up to 11 pt at 60 pt, −200): the canvas shows
+    // it whole, the press doesn't. Opacity is known for what was set in this session.
+    if (S.opacity.has(it.id) && S.opacity.get(it.id) < 100) {
+      try { if (textRuns(it.id).runs.some(r => r.tracking < 0)) out.push(FADED_TIGHT_MSG); }
+      catch (e) { console.error(e); }
+    }
     // Words on a fold crack and fade where the paper bends; on a perforation they are torn in two.
     const near = g => g.axis === 'v' ? x0 < g.at + safety && x1 > g.at - safety : y0 < g.at + safety && y1 > g.at - safety;
     if (linesOn('folds', S.page).some(near)) out.push('Some words are on or too close to a fold (the orange line). Keep them inside one panel.');
@@ -559,12 +597,18 @@ function problemsOf(it) {
   return out;
 }
 
-// Problems with the whole design rather than one thing on it.
+// Problems with the whole design rather than one thing on it, as [message, severe].
 function docProblems() {
   const out = [];
+  const pf = S.preflight || [];
+  // From an IDML file: photos linked rather than included, and fonts this designer doesn't have.
+  const links = [...new Set(pf.filter(p => p.kind === 'missingLink').map(p => p.message.replace(/^Missing (link|graphic):? ?/, '').trim().split(/[\\/]/).pop() || 'a photo'))];
+  if (links.length) out.push(['A photo in your file isn\'t included (' + links.slice(0, 3).join(', ') + (links.length > 3 ? ', …' : '') + ') and its frame will print empty. Put the photo in again: select the frame, then Replace photo.', true]);
+  const fonts = [...new Set(pf.filter(p => p.kind === 'missingFont').map(p => p.message.replace(/^Missing font: /, '')))];
+  if (fonts.length) out.push(['The font ' + fonts.slice(0, 3).join(', ') + (fonts.length > 3 ? ', …' : '') + ' isn\'t available here, so that text prints in Source Sans 3 instead. Pick one of the fonts here to see it as it will print.', false]);
   const chars = [...new Set((S.preflight || []).filter(p => p.kind === 'missingGlyphs')
     .flatMap(p => p.message.replace(/ and \d+ more$/, '').split(': ').slice(1).join(': ').split(' ')).filter(Boolean))];
-  if (chars.length) out.push('These characters can\'t be printed in the fonts here and would print as empty boxes: ' + chars.join(' ') + '. Delete them (emoji, and letters from other alphabets, can\'t be printed).');
+  if (chars.length) out.push(['These characters can\'t be printed in the fonts here and would print as empty boxes: ' + chars.join(' ') + '. Delete them (emoji, and letters from other alphabets, can\'t be printed).', true]);
   return out;
 }
 
@@ -579,7 +623,7 @@ function updateChrome() {
   el.undo.disabled = !S.canUndo;
   el.redo.disabled = !S.canRedo;
   [...el.sides.children].forEach((b, i) => b.setAttribute('aria-selected', String(i === S.page)));
-  const msgs = [...new Set([...docProblems(), ...S.items.flatMap(problemsOf)])];
+  const msgs = [...new Set([...docProblems().map(([m]) => m), ...S.items.flatMap(problemsOf)])];
   el.warnings.textContent = '';
   for (const m of msgs) { const d = document.createElement('div'); d.textContent = m; el.warnings.appendChild(d); }
   el.emptyHint.hidden = S.items.length > 0 || S.mode === 'adv';
@@ -635,8 +679,8 @@ function textStyle(id) {
     run('selection.set', { ids: [id] });
     const a = run('type.selectionAttrs') || {}, ch = a.chars || {}, pa = a.para || {};
     if (ch.size > 0) st.size = Math.round(ch.size * 2) / 2;
-    const font = Object.keys(FONTS).find(k => FONTS[k].family === ch.fontFamily);
-    if (font) st.font = font;
+    // A face Simple's three don't name (set in Advanced, or from IDML) shows as none of them.
+    if (typeof ch.fontFamily === 'string') st.font = Object.keys(FONTS).find(k => FONTS[k].family === ch.fontFamily) || '';
     if (typeof ch.fontStyle === 'string') st.bold = /bold/i.test(ch.fontStyle);
     if (pa.align) st.align = pa.align === 'leftJustified' ? 'left' : ALIGNS.includes(pa.align) ? pa.align : st.align;
     const c = COLOURS.find(x => (x.swatch || S.swatchNames.get('PPS ' + x.name) || 'PPS ' + x.name) === ch.fill);
@@ -701,17 +745,37 @@ function applyColour(c) {
   changed();
 }
 
+// Simple's toolbar changes only what was asked, run by run: + and − scale every size in the box
+// together (a heading and its smaller lines stay apart), Bold keeps italic and the face, a font
+// keeps bold and italic where the new face has them. Until 2026-10-12 every button re-sent the
+// whole box's font from Simple's three faces at one size, so + alone turned JetBrains Mono into
+// Source Sans, Bold Italic into Bold, and an IDML heading and its body text into one size.
 function applyTextStyle(patch) {
   const it = selected();
   if (!isText(it)) return;
-  const st = Object.assign(textStyle(it.id), patch);
-  const f = FONTS[st.font] || FONTS.clean;
+  const st = textStyle(it.id);
   try {
-    run('selection.set', { ids: [it.id] });
-    run('type.char', { attrs: { fontFamily: f.family, fontStyle: st.bold ? f.bold : f.regular, size: st.size } });
-    if ('align' in patch) run('type.para', { attrs: { align: st.align } });
+    if ('size' in patch && st.size > 0) {
+      const k = patch.size / st.size;
+      if (Math.abs(k - 1) > 1e-6) scaleText(it.id, k);
+    }
+    if ('bold' in patch) {
+      formatRuns(it.id, r => {
+        const fontStyle = styleFor(r.fontFamily, patch.bold, isItalicStyle(r.fontStyle));
+        return fontStyle !== r.fontStyle ? { fontStyle } : null;
+      });
+    }
+    if ('font' in patch && FONTS[patch.font]) {
+      const family = FONTS[patch.font].family;
+      formatRuns(it.id, r => ({ fontFamily: family, fontStyle: styleFor(family, isBoldStyle(r.fontStyle), isItalicStyle(r.fontStyle)) }));
+    }
+    if ('align' in patch) {
+      run('selection.set', { ids: [it.id] });
+      run('type.para', { attrs: { align: patch.align } });
+    }
     fitText(it.id);
   } catch (e) { console.error(e); toast('That style could not be applied.'); return; }
+  textStyle(it.id);
   changed();
 }
 
@@ -782,6 +846,8 @@ $('textDone').addEventListener('click', () => { commitText(); closeTextEditor();
 function openTextEditor() {
   const it = selected();
   if (!isText(it)) return;
+  flushText();
+  S.editId = it.id;
   const s = tryRun('story.get', { story: it.story });
   el.textInput.value = s ? s.text || '' : '';
   el.textEditor.hidden = false;
@@ -789,7 +855,7 @@ function openTextEditor() {
   el.textInput.focus();
   el.textInput.select();
 }
-function closeTextEditor() { el.textEditor.hidden = true; }
+function closeTextEditor() { flushText(); el.textEditor.hidden = true; S.editId = null; }
 function placeTextEditor() {
   if (el.textEditor.hidden) return;
   const it = selected();
@@ -805,12 +871,37 @@ function placeTextEditor() {
   el.textEditor.style.top = top + 'px';
 }
 
+// The most a text box takes. The box itself refuses more (maxlength), so what the customer sees
+// in it is what prints; a paste that was cut is said so.
+const TEXT_MAX = 5000;
+el.textInput.maxLength = TEXT_MAX;
+el.textInput.addEventListener('paste', e => {
+  const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
+  const room = TEXT_MAX - el.textInput.value.length + (el.textInput.selectionEnd - el.textInput.selectionStart);
+  if (t.length > room) toast('That\'s more words than a text box takes: only the first ' + TEXT_MAX.toLocaleString() + ' characters were kept.', 7000);
+});
+
+// Text pasted from Word, PowerPoint or a web page brings characters no font draws: soft returns
+// (\v), paragraph separators, form feeds, carriage returns. They printed as empty boxes. Line
+// breaks become line breaks; other control characters go.
+function cleanText(t) {
+  return t.replace(/\r\n?/g, '\n').replace(/[\u000b]/g, '\u2028').replace(/[\u2029\u000c\u0085]/g, '\n')
+    .replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f]/g, '');
+}
+
 let textTimer = 0;
+// A commit still waiting (the editor saves 250 ms after the last key) happens now, to the frame
+// it was typed into: before another tap, key, side, option or undo can change what is selected.
+function flushText() { if (textTimer) commitText(); }
 function commitText() {
+  // A closed editor holds the words of the last frame edited: committing them would write them
+  // into whatever is selected now (Print did, before 2026-10-12).
+  if (el.textEditor.hidden && !textTimer) return;
   clearTimeout(textTimer);
-  const it = selected();
+  textTimer = 0;
+  const it = S.editId != null ? (run('document.inspect').spreads || []).flatMap(sp => sp.items || []).find(x => x.id === S.editId) : selected();
   if (!isText(it)) return;
-  const text = el.textInput.value.slice(0, 2000);
+  const text = cleanText(el.textInput.value.slice(0, TEXT_MAX));
   const cur = tryRun('story.get', { story: it.story });
   if (cur && cur.text === text) return;
   if (tryRun('story.setText', { story: it.story, text }) === undefined) return;
@@ -819,6 +910,9 @@ function commitText() {
   changed();
 }
 el.textInput.addEventListener('input', () => { clearTimeout(textTimer); textTimer = setTimeout(commitText, 250); });
+// Anything outside the text box (a tap on the design, a button, a key) finds the words saved.
+document.addEventListener('pointerdown', e => { if (!el.textEditor.contains(e.target)) flushText(); }, true);
+document.addEventListener('keydown', e => { if (e.target !== el.textInput) flushText(); }, true);
 el.textInput.addEventListener('keydown', e => {
   if (e.key === 'Escape') { commitText(); closeTextEditor(); }
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { commitText(); closeTextEditor(); }
@@ -995,6 +1089,9 @@ el.photoPick.addEventListener('change', async () => {
     catch (e) { console.error(e); }
   }
   const up = { name, bytes, dims: [bmp.width, bmp.height], url: URL.createObjectURL(file), bmp };
+  // A CMYK JPEG prints as its own inks (right), but the screen shows it far brighter than it
+  // prints: the customer is told once, so a blue that looks electric isn't a surprise on paper.
+  if (jpegIsCmyk(bytes)) setTimeout(() => toast('This photo is saved in print colours (CMYK). The screen shows it brighter than it will print; the printed colours will be those in the file.', 9000), 600);
   S.uploads.push(up);
   addUploadThumb(up);
   placePhoto(up, S.replaceInto);
@@ -1012,6 +1109,19 @@ async function encodePhoto(bmp) {
   c.getContext('2d').drawImage(bmp, 0, 0);
   const blob = await new Promise((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error('photo could not be encoded'))), 'image/jpeg', 0.95));
   return new Uint8Array(await blob.arrayBuffer());
+}
+
+// Whether a JPEG holds four colour channels (CMYK, from a print-ready export).
+function jpegIsCmyk(b) {
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return false;
+  let i = 2;
+  while (i + 9 < b.length && b[i] === 0xff) {
+    const marker = b[i + 1], len = (b[i + 2] << 8) | b[i + 3];
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return b[i + 9] === 4;
+    if (marker === 0xda || len < 2) return false;
+    i += 2 + len;
+  }
+  return false;
 }
 
 // EXIF Orientation (1–8) of a JPEG, or 0 when it has none.
@@ -1119,8 +1229,10 @@ el.filePick.addEventListener('change', async () => {
     refresh();
     return;
   }
+  keepOnly(opened.index);
   resetLocalState();
   S.undoFloor = 0;
+  S.resizeBase = null;
   S.dirty = true;
   afterAdd();
   refresh();
@@ -1161,7 +1273,10 @@ el.canvas.addEventListener('pointerdown', e => {
   const h = handleAt(x, y);
   if (h >= 0) {
     const it = selected();
-    S.drag = { mode: 'resize', corner: h, id: it.id, from: it.bounds.slice(), to: it.bounds.slice(), x, y, moved: false };
+    // A turned item's box is its bounding box: stretched one way, it would skew. It keeps its shape.
+    let turned = false;
+    try { turned = Math.abs(((run('transform.info', { ids: [it.id] }) || {}).rotation || 0) % 90) > 0.01; } catch { /* treat as square-on */ }
+    S.drag = { mode: 'resize', corner: h, id: it.id, from: it.bounds.slice(), to: it.bounds.slice(), x, y, moved: false, keepShape: turned };
   } else {
     const it = hit(x, y);
     if (!it) { if (!el.textEditor.hidden) commitText(); select(null); return; }
@@ -1198,6 +1313,11 @@ el.canvas.addEventListener('pointermove', e => {
     const left = d.corner === 0 || d.corner === 2, top = d.corner === 0 || d.corner === 1;
     d.to = [left ? Math.min(nx, x1 - min) : x0, top ? Math.min(ny, y1 - min) : y0,
             left ? x1 : Math.max(nx, x0 + min), top ? y1 : Math.max(ny, y0 + min)];
+    if (d.keepShape) {
+      const k = Math.max((d.to[2] - d.to[0]) / (x1 - x0), (d.to[3] - d.to[1]) / (y1 - y0));
+      const w = (x1 - x0) * k, hh = (y1 - y0) * k;
+      d.to = [left ? x1 - w : x0, top ? y1 - hh : y0, left ? x1 : x0 + w, top ? y1 : y0 + hh];
+    }
   }
   draw();
 });
@@ -1237,16 +1357,18 @@ el.canvas.addEventListener('dblclick', () => { if (isText(selected())) openTextE
 el.undo.addEventListener('click', undo);
 el.redo.addEventListener('click', redo);
 function undo() {
+  flushText();
   closeTextEditor();
   // A size or sides change came from the order (Order options): undo stops there, so the design
   // can never drift from the size the calculator is pricing.
   if (S.undoDepth <= S.undoFloor) {
-    if (S.undoFloor > 0) toast('To change the size or sides, use Order options.');
+    if (S.undoFloor > 0 || S.sizeChanged) toast('To change the size or sides, use Order options.');
     return;
   }
   if (tryRun('edit.undo', {}) !== undefined) { S.dirty = true; S.canRedo = true; refresh(); }
 }
 function redo() {
+  flushText();
   closeTextEditor();
   try { run('edit.redo', {}); } catch { S.canRedo = false; updateChrome(); return; }
   S.dirty = true; refresh();
@@ -1292,7 +1414,7 @@ function openChecks() {
   const ins = run('document.inspect');
   const spreads = (ins.spreads || []).map(sp => sp.items || []);
   const keep = S.page;
-  const lines = docProblems().map(p => ['stop', p]);
+  const lines = docProblems().map(([m, severe]) => [severe ? 'stop' : 'warn', m]);
   spreads.forEach((all, i) => {
     const items = all.filter(it => !it.hidden);
     S.page = i; S.items = items;
@@ -1485,7 +1607,7 @@ function paintChip(chip, name) {
 }
 
 function swatchSelect(sel, current) {
-  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]')];
+  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]' && n !== '[Registration]')];
   if (current && !names.includes(current)) names.push(current);
   const key = names.join('|');
   if (sel.dataset.key !== key) {
@@ -1748,7 +1870,7 @@ $('layerDown').addEventListener('click', () => {
 });
 
 function updateSwatchPanel() {
-  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]')];
+  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]' && n !== '[Registration]')];
   const key = names.join('|');
   if (el.swatchList.dataset.key === key) return;
   el.swatchList.dataset.key = key;
@@ -1865,6 +1987,14 @@ function renderOrderFields() {
         if (!Number.isFinite(v) || (o.min != null && v < o.min) || (o.max != null && v > o.max)) { input.value = o.value; toast(o.label + ' must be ' + (o.min != null ? 'at least ' + o.min : '') + (o.max != null ? ' and at most ' + o.max : '') + '.'); return; }
       }
       if (v === o.value) return;
+      // Fewer sides, with a design on the side that goes: asked here, before the calculator hears
+      // of it (it drops that side's artwork as soon as it does). An option keyed `sides` is a
+      // page count by convention (HANDSHAKE.md).
+      if (o.key === 'sides' && Number(v) >= 1 && Number(v) < S.spec.pages) {
+        const lost = allPages().slice(Number(v)).some(items => items.length);
+        if (lost && !confirm(sideName(Number(v)) + ' has a design on it. Printing ' + (Number(v) === 1 ? 'one side' : v + ' sides') + ' removes it. Continue?')) { input.value = o.value; return; }
+        S.sidesConfirmed = true;
+      }
       S.lastOption = { key: o.key, prev: o.value };
       o.value = v;
       el.orderPrice.classList.add('busy');
@@ -1882,9 +2012,11 @@ function renderOrderPrice() {
   el.orderPrice.textContent = '';
   if (!S.price) {
     el.orderPrice.hidden = !S.embedded;
-    if (S.embedded) el.orderPrice.textContent = 'Price shown on your order';
+    if (S.embedded) el.orderPrice.textContent = S.priceError ? 'This can\'t be priced as it is: ' + S.priceError : 'Price shown on your order';
+    el.orderPrice.classList.toggle('cant', !!S.priceError);
     return;
   }
+  el.orderPrice.classList.remove('cant');
   el.orderPrice.hidden = false;
   el.orderPrice.append('$' + S.price.total.toFixed(2));
   const small = document.createElement('small');
@@ -1919,6 +2051,9 @@ function revertOption() {
 
 // A new spec from the calculator while designing: a new size, or sides added or removed.
 function applySpec(spec) {
+  flushText();
+  // A drag in progress measured the card before this change: drop it rather than apply it.
+  if (S.drag) { S.drag = null; draw(); }
   const bad = validSpec(spec);
   if (bad) { console.warn('ignored a spec that is not usable (' + bad + ')'); revertOption(); return; }
   const next = { w: spec.trimW, h: spec.trimH, bleed: spec.bleed ?? S.spec.bleed, safety: spec.safety ?? S.spec.safety, pages: spec.pages, ...specGuides(spec) };
@@ -1930,7 +2065,8 @@ function applySpec(spec) {
     S.lastOption = null; el.orderPrice.classList.remove('busy');
     return;
   }
-  if (next.pages < cur.pages) {
+  const asked = S.sidesConfirmed; S.sidesConfirmed = false;
+  if (next.pages < cur.pages && !asked) {
     const lost = allPages().slice(next.pages).some(items => items.length);
     if (lost && !confirm(sideName(next.pages) + ' has a design on it. Printing ' + (next.pages === 1 ? 'one side' : next.pages + ' pages') + ' removes it. Continue?')) { revertOption(); return; }
   }
@@ -1939,14 +2075,35 @@ function applySpec(spec) {
   S.lastOption = null;
 }
 
+// The undo history as a stamp: two equal stamps mean nothing was done to the design in between.
+function docStamp() {
+  try { return JSON.stringify((run('document.history') || {}).undo || []); } catch { return null; }
+}
+
 // Changes the document to the new trim, bleed and page count, and moves and scales what is on
 // it to match: each object keeps its place relative to the card and its shape (scaled evenly, by
 // the smaller of the two changes), and anything that covered the whole card (a background, a
-// photo filling the side) still covers the new one to the bleed. Text keeps its look at the new
-// scale. Undo stops here: the size belongs to the order.
+// photo filling the side) still covers the new one to the bleed. Text is scaled run by run, its
+// leading with it, so mixed sizes stay mixed. Locked items move too.
+//
+// A run of size changes with nothing done to the design between them starts from the design as
+// it was before the first: trying Portrait and going back to Landscape gives the design back as
+// it was, where scaling the scaled copy shrank it each time (0.67 × 0.67 for one round trip).
+//
+// Undo starts afresh at the new size (the engine's history is reset), so the design can never
+// drift from the size being priced, and the engine's 1,000-step history can't leave undo dead.
 function resizeDocument(next) {
-  const old = S.spec;
-  const before = (run('document.inspect').spreads || []).map(sp => (sp.items || []).map(it => ({ id: it.id, b: it.bounds, kind: it.kind })));
+  let old = S.spec;
+  if (S.resizeBase && S.resizeBase.stamp !== null && S.resizeBase.stamp === docStamp()) {
+    keepOnly(JSON.parse(S.d.openDesign(S.resizeBase.design)).index);
+    old = S.resizeBase.spec;
+  } else {
+    S.resizeBase = { design: S.d.saveDesign(), spec: S.spec, stamp: null };
+  }
+  const before = (run('document.inspect').spreads || []).map(sp => (sp.items || []).map(it => ({ id: it.id, b: it.bounds, kind: it.kind, locked: it.locked })));
+  // The engine leaves a locked item where it is: unlocked for the move, locked again after.
+  const locked = before.flat().filter(x => x.locked).map(x => x.id);
+  if (locked.length) run('object.setFlags', { ids: locked, locked: false });
   run('layout.documentSetup', { width: next.w, height: next.h, pages: next.pages, bleed: next.bleed });
   if (Math.abs(next.safety - old.safety) > 0.01) run('layout.marginsAndColumns', { margins: next.safety });
   const sx = next.w / old.w, sy = next.h / old.h, k = Math.min(sx, sy);
@@ -1961,13 +2118,13 @@ function resizeDocument(next) {
     if (!to.every((v, i) => Math.abs(v - b[i]) < 0.01)) run('transform.resize', { from: b, to, content: false, ids: [id] });
     if (kind === '<image>') run('object.fit', { mode: 'fillProportionally', ids: [id] });
     if (kind === '<text frame>' && Math.abs(k - 1) > 0.01) {
-      const st = textStyle(id);
-      st.size = Math.max(4, Math.round(st.size * k * 2) / 2);
-      run('selection.set', { ids: [id] });
-      run('type.char', { attrs: { size: st.size } });
+      scaleText(id, k);
       fitText(id, page);
     }
   }));
+  if (locked.length) run('object.setFlags', { ids: locked, locked: true });
+  keepOnly(JSON.parse(S.d.openDesign(S.d.saveDesign())).index);
+  S.resizeBase.stamp = docStamp();
   S.spec = next;
   updateLegend();
   el.productSize.textContent = inch(next.w) + ' × ' + inch(next.h) + ' in';
@@ -1975,11 +2132,71 @@ function resizeDocument(next) {
   S.sel = null;
   S.dirty = true;
   S.canRedo = false;
-  try { S.undoFloor = (run('document.history').undo || []).length; } catch { S.undoFloor = Infinity; }
+  S.undoFloor = 0;
+  S.sizeChanged = true;
   buildSides();
   el.pagesList.textContent = '';
   layout();
 }
+
+// ── text, run by run ──────────────────────────────────────────
+
+const utf8Len = cp => (cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4);
+
+// A text frame's story as runs: consecutive characters with the same size, leading, font and
+// style, with their UTF-8 byte ranges (the engine's text offsets). The engine answers a whole
+// frame with its first character's type, so a heading and its smaller lines below would read as
+// one size; asking character by character is quick (about 0.1 ms each).
+function textRuns(id) {
+  const st = run('story.get', { frame: id });
+  const runs = [];
+  let at = 0, cur = null;
+  for (const ch of (st && st.text) || '') {
+    const n = utf8Len(ch.codePointAt(0));
+    run('text.select', { story: st.id, anchor: at, focus: at + n });
+    const c = (run('type.selectionAttrs') || {}).chars || {};
+    const lead = c.leading && c.leading.kind === 'points' ? c.leading.value : null;
+    const key = [c.size, lead, c.fontFamily, c.fontStyle, c.tracking].join('|');
+    if (cur && cur.key === key) cur.b = at + n;
+    else { cur = { key, a: at, b: at + n, size: c.size, leading: lead, fontFamily: c.fontFamily, fontStyle: c.fontStyle, tracking: c.tracking || 0 }; runs.push(cur); }
+    at += n;
+  }
+  run('selection.set', { ids: S.sel != null ? [S.sel] : [] });   // back to what the page has selected
+  return { story: st && st.id, runs };
+}
+
+// Applies fn(run) → attributes (or nothing) to each run of a text frame.
+function formatRuns(id, fn) {
+  const { story, runs } = textRuns(id);
+  for (const r of runs) {
+    const attrs = fn(r);
+    if (!attrs || !Object.keys(attrs).length) continue;
+    run('text.select', { story, anchor: r.a, focus: r.b });
+    run('type.char', { attrs });
+  }
+  run('selection.set', { ids: [id] });
+}
+
+// Every run's size (and fixed leading) times k.
+function scaleText(id, k) {
+  formatRuns(id, r => {
+    const a = {};
+    if (r.size > 0) a.size = Math.max(4, Math.round(r.size * k * 2) / 2);
+    if (r.leading > 0) a.leading = { kind: 'points', value: Math.max(1, Math.round(r.leading * k * 10) / 10) };
+    return a;
+  });
+}
+
+// The style of `family` closest to bold/italic as asked: Bold Italic, Bold, SemiBold, Italic,
+// Regular, as the family has them.
+function styleFor(family, bold, italic) {
+  const have = FAMILIES[family] || [];
+  const want = bold && italic ? ['Bold Italic', 'SemiBold Italic', 'Semibold Italic', 'Bold', 'SemiBold', 'Semibold']
+    : bold ? ['Bold', 'SemiBold', 'Semibold'] : italic ? ['Italic', 'Regular'] : ['Regular'];
+  return want.find(x => have.includes(x)) || (bold ? want[want.length - 1] : 'Regular');
+}
+const isBoldStyle = st => /bold/i.test(st || '');
+const isItalicStyle = st => /italic/i.test(st || '');
 
 // Standalone (the preview), the page plays the calculator's part with a few sizes, so the
 // panel can be tried. No prices: those only ever come from the calculator.

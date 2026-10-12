@@ -126,6 +126,9 @@ function inflatedText(pdf) {
   return parts.join('\n');
 }
 
+// The type sizes a PDF sets (its Tf operators), distinct and sorted.
+const tfSizes = pdf => [...new Set((contentStreams(pdf).join('\n').match(/[\d.]+ Tf\b/g) || []).map(t => +parseFloat(t).toFixed(2)))].sort((a, b) => a - b);
+
 let checks = 0, failed = 0;
 const ok = (label, cond, detail = '') => {
   checks++;
@@ -455,6 +458,193 @@ const errors = [];
   await ctx.close();
 }
 
+// ── the second sweep (2026-10-12): what an adversarial tester did to the design ──
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, acceptDownloads: true });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  page.on('dialog', d => d.accept());
+  const printPdf = async () => {
+    await page.click('#print');
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#sheetGo')]);
+    return readFile(await dl.path());
+  };
+  const toastText = async () => { await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 }); const t = await page.textContent('#toast'); await page.evaluate(() => { document.getElementById('toast').hidden = true; }); return t; };
+  await page.goto(BASE + 'designer.html?product=Postcard');
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  const canvasAt = async (x, y, wPt, hPt) => { const b = await page.locator('#canvas').boundingBox(); return [b.x + b.width * (x + 9) / (wPt + 18), b.y + b.height * (y + 9) / (hPt + 18)]; };
+
+  // Trying Portrait and going back, three times, must give the design back as it was.
+  await page.click('[data-text="heading"]');
+  await page.fill('#textInput', 'Grand opening');
+  await page.click('#textDone');
+  await page.click('#orderTab');
+  for (let i = 0; i < 3; i++) {
+    await page.selectOption('#orderFields select[data-key="orientation"]', 'portrait'); await page.waitForTimeout(300);
+    await page.selectOption('#orderFields select[data-key="orientation"]', 'landscape'); await page.waitForTimeout(300);
+  }
+  await page.click('#orderClose');
+  let pdf = await printPdf();
+  ok('portrait and back, three times, leaves the design as it was (heading still 54 pt)', tfSizes(pdf).includes(54), JSON.stringify(tfSizes(pdf)));
+
+  // Words typed, then straight away another side: they are saved to the box they were typed in.
+  const [hx, hy] = await canvasAt(324, 9 + 0.3 * 414, 648, 432);
+  await page.mouse.click(hx, hy);
+  await page.click('#editText');
+  await page.fill('#textInput', 'Saved in time');
+  await page.click('#sides button:nth-child(2)');
+  await page.click('#sides button:nth-child(1)');
+  await page.mouse.click(hx, hy);
+  await page.click('#editText');
+  ok('words typed just before switching sides are kept, in their own box', (await page.inputValue('#textInput')) === 'Saved in time', await page.inputValue('#textInput'));
+  await page.click('#textDone');
+
+  // Print with the editor closed must not write the last-edited words into another box.
+  await page.click('[data-text="body"]');
+  await page.fill('#textInput', 'Second box');
+  await page.click('#textDone');
+  await page.mouse.click(hx, hy);
+  await page.click('#print');
+  await page.click('#sheetCancel');
+  await page.mouse.click(hx, hy);
+  await page.click('#editText');
+  ok('Print does not copy the last-edited words into the selected box', (await page.inputValue('#textInput')) === 'Saved in time', await page.inputValue('#textInput'));
+
+  // A soft return pasted from Word or PowerPoint is a line break, not an empty box.
+  await page.fill('#textInput', '');
+  await page.keyboard.insertText('Spring sale\u000bSaturday only');
+  await page.click('#textDone');
+  await page.waitForTimeout(300);
+  pdf = await printPdf();
+  // Two lines of 54 pt type, and the story holds a line break (U+2028) where the \\v was.
+  const lines54 = (contentStreams(pdf).join('\n').match(/\b54 Tf\b/g) || []).length;
+  await page.mouse.click(hx, hy);
+  await page.click('#editText');
+  const stored = await page.inputValue('#textInput');
+  await page.click('#textDone');
+  ok('a pasted soft return (\\v) is stored and printed as a line break, not a missing-glyph box', stored === 'Spring sale\u2028Saturday only' && lines54 === 2, JSON.stringify(stored) + ' ' + lines54 + ' lines');
+  ok('the text box takes at most 5,000 characters, as it shows', (await page.evaluate(() => document.getElementById('textInput').maxLength)) === 5000);
+
+  // Words nudged half off the card are a problem, not a hint.
+  await page.waitForTimeout(700);   // not a second tap (that opens the words for editing)
+  await page.mouse.click(hx, hy);
+  for (let i = 0; i < 40; i++) await page.keyboard.press('Shift+ArrowRight');
+  await page.waitForTimeout(200);
+  await page.click('#print');
+  const stops = await page.locator('#checks li.stop').allTextContents();
+  ok('words run past the edge of the card are marked as a problem', stops.some(t => /run past the edge/.test(t)), JSON.stringify(stops));
+  await page.click('#sheetCancel');
+  await ctx.close();
+}
+{
+  // An IDML file with a missing photo, a font this designer lacks, and three type sizes.
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, acceptDownloads: true });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  page.on('dialog', d => d.accept());
+  const printPdf = async () => {
+    await page.click('#print');
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#sheetGo')]);
+    return readFile(await dl.path());
+  };
+  await page.goto(BASE + 'designer.html?product=Postcard');
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  await page.setInputFiles('#filePick', path.join(HERE, 'fixtures', 'card-9x6-mixed.idml'));
+  await page.waitForTimeout(800);
+  await page.click('#print');
+  const lines = await page.locator('#checks li').evaluateAll(ls => ls.map(l => l.className + ': ' + l.textContent));
+  ok('a photo linked but not in the IDML is a problem in the print check, by name', lines.some(l => /^stop: .*isn't included \(logo\.jpg\)/.test(l)), JSON.stringify(lines));
+  ok('…and a font the designer lacks is named', lines.some(l => /^warn: The font Arial/.test(l)), JSON.stringify(lines));
+  await page.click('#sheetCancel');
+  const b = await page.locator('#canvas').boundingBox();
+  const hx = b.x + b.width * (324 + 9) / 666, hy = b.y + b.height * (190 + 9) / 450;
+  await page.mouse.click(hx, hy);
+  await page.click('#sizeUp');
+  await page.waitForTimeout(300);
+  let pdf = await printPdf();
+  ok('+ scales every size in a mixed box together (24/36/18 → 26/39/19.5)', JSON.stringify(tfSizes(pdf)) === '[19.5,26,39]', JSON.stringify(tfSizes(pdf)));
+  await page.click('#orderTab');
+  await page.selectOption('#orderFields select[data-key="size"]', '6x4');
+  await page.waitForTimeout(500);
+  await page.click('#orderClose');
+  pdf = await printPdf();
+  ok('a size change keeps mixed sizes mixed (scaled by 2/3)', tfSizes(pdf).length === 3 && tfSizes(pdf)[2] === 26, JSON.stringify(tfSizes(pdf)));
+
+  // A face set in Advanced survives Simple's + button; a locked item follows a size change.
+  await page.click('#modeAdv');
+  await page.waitForTimeout(300);
+  const b2 = await page.locator('#canvas').boundingBox();
+  const k2 = b2.width / (432 + 18);
+  await page.mouse.click(b2.x + (216 + 9) * k2, b2.y + (126 + 9) * k2);
+  await page.selectOption('#ctlFont', 'JetBrains Mono');
+  await page.waitForTimeout(200);
+  await page.click('#modeSimple');
+  await page.waitForTimeout(300);
+  await page.click('#sizeUp');
+  await page.waitForTimeout(300);
+  pdf = await printPdf();
+  ok('Simple\'s + leaves a face set in Advanced alone (JetBrains Mono stays)', /JetBrainsMono/.test(inflatedText(pdf)), (inflatedText(pdf).match(/FontName\s*\/[A-Z]{6}\+[\w-]+/g) || []).join(','));
+  await ctx.close();
+}
+{
+  // Advanced: faded text with tight letter spacing (the PDF cuts its last letter), [Registration]
+  // (400% ink) and a CMYK photo (brighter on screen than in print).
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(BASE + 'designer.html?product=Postcard');
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  await page.click('[data-text="heading"]');
+  await page.fill('#textInput', 'Overlapping');
+  await page.click('#textDone');
+  await page.click('#modeAdv');
+  await page.waitForTimeout(400);
+  const b = await page.locator('#canvas').boundingBox();
+  const k = b.width / (648 + 18);
+  await page.mouse.click(b.x + (324 + 9) * k, b.y + (9 + 0.3 * 414 + 9) * k);
+  await page.fill('#ctlTracking', '-200'); await page.press('#ctlTracking', 'Enter');
+  await page.fill('#ctlOpacity', '50'); await page.press('#ctlOpacity', 'Enter');
+  await page.waitForTimeout(300);
+  await page.click('#print');
+  const stops = await page.locator('#checks li.stop').allTextContents();
+  ok('faded text with tight letter spacing is a problem in the print check (the PDF cuts its last letter)', stops.some(t => /Faded text with tight letter spacing/.test(t)), JSON.stringify(stops));
+  await page.click('#sheetCancel');
+  const lists = await page.evaluate(() => [...document.querySelectorAll('#swatchList button, #ctlFill option, #ctlStroke option')].map(e => e.textContent || e.value));
+  ok('[Registration] (400% ink) is not offered as a colour', lists.length > 0 && !lists.some(t => /Registration/.test(t)), lists.join(','));
+  await page.setInputFiles('#photoPick', path.join(HERE, 'fixtures', 'print-cmyk.jpg'));
+  await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 });
+  await page.waitForFunction(() => /CMYK/.test(document.getElementById('toast').textContent), null, { timeout: 5000 }).catch(() => {});
+  ok('a CMYK photo is said to look brighter on screen than in print', /print colours \(CMYK\)/.test(await page.textContent('#toast')), await page.textContent('#toast'));
+  await ctx.close();
+}
+{
+  // A phone: the page doesn't scroll sideways into the closed Order options panel.
+  const iphone = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' };
+  const ctx = await browser.newContext(iphone);
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  await page.goto(BASE + 'designer.html?product=Postcard');
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  const w = await page.evaluate(() => [document.scrollingElement.scrollWidth, window.innerWidth]);
+  ok('on a phone the page is no wider than the screen', w[0] <= w[1], JSON.stringify(w));
+  await ctx.close();
+}
+{
+  // A poster zoomed in: drawn (softer), never "could not be drawn".
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 2 });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  const logged = []; page.on('console', m => { if (m.type() === 'error') logged.push(m.text()); });
+  await page.goto(BASE + 'designer.html?product=Poster&w=24&h=36&pages=1');
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  await page.click('#modeAdv');
+  for (let i = 0; i < 4; i++) { await page.click('#zoomIn'); await page.waitForTimeout(250); }
+  const toastShown = await page.isVisible('#toast');
+  ok('a 24 × 36 in poster zoomed in is still drawn', !toastShown && !logged.some(t => /render|preview/i.test(t)), (await page.textContent('#toast')) + ' ' + logged.join(' | ').slice(0, 200));
+  await ctx.close();
+}
+
 // ── embedded in a calculator (handshake, brief §6) ──
 {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
@@ -519,8 +709,25 @@ const errors = [];
   await frame.locator('#sheetGo').click();
   await page.waitForFunction(() => window.got.filter(m => m.type === 'pps-design:print').length === 2, null, { timeout: 60000 });
   const p2 = await page.evaluate(() => window.got.filter(m => m.type === 'pps-design:print')[1]);
+  // Reopened for one side: the back's design is left out, and the customer is told.
+  await frame.locator('#sides button:nth-child(2)').click();
+  await frame.locator('[data-text="heading"]').click();
+  await frame.locator('#textDone').click();
+  await frame.locator('#back').click();
+  await page.waitForFunction(() => window.got.filter(m => m.type === 'pps-design:close').length === 2, null, { timeout: 10000 });
+  await page.evaluate(spec => document.getElementById('f').contentWindow.postMessage({ type: 'pps-design:job', v: 1, spec: { ...spec, pages: 1, pageMultiple: 1 }, design: window.lastDesign }, location.origin), spec64);
+  await frame.locator('#toast:not([hidden])').waitFor({ timeout: 10000 });
+  ok('reopened for fewer sides, the customer is told the rest of the design was left out', /left out/.test(await frame.locator('#toast').textContent()), await frame.locator('#toast').textContent());
+  // A saved design that can't be read is said so, not silently replaced by a blank card.
+  await page.evaluate(spec => document.getElementById('f').contentWindow.postMessage({ type: 'pps-design:job', v: 1, spec, design: 'bm90IGEgZGVzaWdu' }, location.origin), spec64);
+  await frame.locator('#toast', { hasText: "couldn't be reopened" }).waitFor({ timeout: 10000 });
+  ok('a saved design that can\'t be reopened is said so', true);
+  // A size in inches sent as points (6 × 4 "pt") is refused, not printed as a 0.08 in card.
+  await page.evaluate(() => document.getElementById('f').contentWindow.postMessage({ type: 'pps-design:job', v: 1, spec: { trimW: 6, trimH: 4, bleed: 9, safety: 9, pages: 1 } }, location.origin));
+  await page.waitForFunction(() => window.got.some(m => m.type === 'pps-design:error'), null, { timeout: 10000 }).catch(() => {});
+  ok('a job under half an inch (inches sent as points) is refused with an error', await page.evaluate(() => window.got.some(m => m.type === 'pps-design:error')));
   ok('a design reopened at a new order size prints at that size (450 x 306 pt)', p2.mediaBox && Math.round(p2.mediaBox[2]) === 450 && Math.round(p2.mediaBox[3]) === 306 && p2.manifest.trimPt[0] === 432, JSON.stringify(p2.mediaBox));
-  ok('nothing else was posted', (await page.evaluate(() => window.got.map(m => m.type))).every(t => /^pps-design:(ready|option|print|close)$/.test(t)));
+  ok('nothing else was posted', (await page.evaluate(() => window.got.map(m => m.type))).every(t => /^pps-design:(ready|option|print|close|error)$/.test(t)));
   await ctx.close();
 }
 
