@@ -347,6 +347,17 @@ const errors = [];
   ok('the chosen workspace is remembered', await page.isVisible('#tools'));
   await page.click('#modeSimple');
   ok('…and Simple brings the rail back', await page.isVisible('.rail'));
+  // On a phone the workspace switch is hidden and the page stays Simple, even if Advanced was
+  // chosen on a bigger screen.
+  await page.click('#modeAdv');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  ok('on a phone the Simple/Advanced switch is hidden', !(await page.isVisible('.modeswitch')));
+  ok('…and the designer stays Simple', !(await page.isVisible('#tools')) && await page.isVisible('.rail'));
+  const tab = await page.locator('#orderTab').boundingBox();
+  const rail = await page.locator('.rail').boundingBox();
+  ok('…with the Order options tab above the rail', tab && rail && tab.y + tab.height <= rail.y, JSON.stringify({ tab, rail }));
   await ctx.close();
 }
 
