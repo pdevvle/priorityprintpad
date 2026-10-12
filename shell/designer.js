@@ -325,7 +325,12 @@ function showPrice(m) {
     S.price = { total: t, qty: Number.isInteger(m.qty) ? m.qty : null, turnaround: m.turnaround };
     el.price.textContent = '$' + t.toFixed(2) + (S.price.qty != null ? ' · ' + S.price.qty.toLocaleString() + ' pcs' : '');
     el.price.hidden = false;
-  } else { S.price = null; el.price.hidden = true; }
+    S.priceError = null;
+  } else {
+    S.price = null; el.price.hidden = true;
+    // The calculator can't price the job as it stands (a panel too small, a size too big).
+    S.priceError = m && typeof m.error === 'string' && m.error ? m.error.slice(0, 200) : null;
+  }
   renderOrderPrice();
 }
 
@@ -1983,9 +1988,11 @@ function renderOrderPrice() {
   el.orderPrice.textContent = '';
   if (!S.price) {
     el.orderPrice.hidden = !S.embedded;
-    if (S.embedded) el.orderPrice.textContent = 'Price shown on your order';
+    if (S.embedded) el.orderPrice.textContent = S.priceError ? 'This can\'t be priced as it is: ' + S.priceError : 'Price shown on your order';
+    el.orderPrice.classList.toggle('cant', !!S.priceError);
     return;
   }
+  el.orderPrice.classList.remove('cant');
   el.orderPrice.hidden = false;
   el.orderPrice.append('$' + S.price.total.toFixed(2));
   const small = document.createElement('small');

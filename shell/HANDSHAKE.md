@@ -23,7 +23,7 @@ source window, and `v === 1`, and ignores anything else.
 | type | payload | when |
 |---|---|---|
 | `pps-design:job` | `spec`, `design?`, `options?` | Answer to `ready`. Starts the design, or reopens `design`. A `design` saved at another size or page count is resized to `spec`, as for `pps-design:spec`. |
-| `pps-design:price` | `total`, `qty?`, `turnaround?` (business days to print) | Any time. Display only. |
+| `pps-design:price` | `total`, `qty?`, `turnaround?` (business days to print); or `total: null` with `error` (why the job can't be priced as it stands) | Any time. Display only. |
 | `pps-design:options` | `options` | Any time. Replaces the Order options list. |
 | `pps-design:spec` | `spec` | The order's size or sides changed. The open design is resized to it. |
 

@@ -280,6 +280,7 @@ svg { width: 22px; height: 22px; flex: none; }
 .orderpanel { position: absolute; z-index: 45; top: 0; right: 0; bottom: 0; width: min(340px, 92vw); background: var(--surface); color: var(--ink);
   border-left: 1px solid var(--line); box-shadow: -10px 0 30px rgba(0,0,0,.15); padding: 14px 16px; overflow: auto;
   transform: translateX(105%); visibility: hidden; transition: transform .22s ease, visibility 0s linear .22s; }
+.op-price.cant { color: #b42318; font-size: 14px; font-weight: 600; }
 .orderpanel.open { transform: none; visibility: visible; transition: transform .22s ease; }
 @media (prefers-reduced-motion: reduce) { .orderpanel, .orderpanel.open { transition: none; } }
 .op-head { display: flex; align-items: center; justify-content: space-between; }
