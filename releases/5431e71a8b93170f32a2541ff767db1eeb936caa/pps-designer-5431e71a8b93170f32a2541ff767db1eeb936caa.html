@@ -1,0 +1,2914 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Design it online · Priority Print Service</title>
+  <style>
+/* PPS Designer, simple mode. Colours are tokens so the calculators' own palette can replace
+   them (brief §5: take the calculators' look from their CSS, don't copy it). */
+:root {
+  --bg: #eef0f4;
+  --surface: #ffffff;
+  --ink: #1d2330;
+  --muted: #5f6b7d;
+  --line: #d9dde5;
+  --accent: #e2531f;
+  --accent-ink: #ffffff;
+  --select: #2563eb;
+  --danger: #b42318;
+  --warn-bg: #fff4e5;
+  --warn-ink: #8a4b00;
+  --radius: 10px;
+  --tap: 44px;
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); overscroll-behavior: none; }
+[hidden] { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+svg { width: 22px; height: 22px; flex: none; }
+
+#app { display: flex; flex-direction: column; height: 100dvh; }
+
+/* ── top bar ── */
+.top { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: var(--surface);
+  border-bottom: 1px solid var(--line); min-height: 64px; }
+.product { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.product strong { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history { display: flex; gap: 6px; }
+.price { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font-weight: 700; white-space: nowrap; }
+.demo { background: var(--warn-bg); color: var(--warn-ink); padding: 8px 16px; font-size: 14px; }
+
+/* ── buttons ── */
+.btn { white-space: nowrap; min-height: var(--tap); min-width: var(--tap); padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; display: inline-flex; align-items: center;
+  justify-content: center; gap: 6px; }
+.btn:hover:not(:disabled) { border-color: var(--muted); background: #f8f9fb; }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.big { min-height: 48px; padding: 0 14px; font-size: 15px; }
+.btn.huge { min-height: 52px; padding: 0 22px; font-size: 17px; }
+.btn.strong { font-weight: 700; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.btn.primary:hover:not(:disabled) { background: #c9461a; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.danger { color: var(--danger); }
+.btn.wide { width: 100%; }
+.btn.toggle[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.btn.big .lbl-sm { font-size: 13px; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* ── tooltips: plain-language help on hover and keyboard focus ── */
+[data-tip] { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip); position: absolute; z-index: 50; left: 50%; top: calc(100% + 8px);
+  transform: translateX(-50%); width: max-content; max-width: 240px; padding: 8px 10px; border-radius: 8px;
+  background: #111827; color: #fff; font-size: 13px; font-weight: 500; line-height: 1.35; text-align: left;
+  white-space: normal; pointer-events: none; opacity: 0; transition: opacity .12s .35s;
+}
+[data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; }
+[data-tip-pos="right"]::after { left: calc(100% + 10px); top: 50%; transform: translateY(-50%); }
+[data-tip-pos="below-end"]::after { left: auto; right: 0; transform: none; }
+[data-tip-pos="below-start"]::after { left: 0; transform: none; }
+[data-tip-pos="left"]::after { left: auto; right: calc(100% + 10px); top: 50%; transform: translateY(-50%); }
+@media (hover: none) { [data-tip]::after { display: none; } }
+@media (prefers-reduced-motion: reduce) { [data-tip]::after { transition: none; } }
+
+/* ── work area: rail · drawer · design ── */
+.work { flex: 1; display: grid; grid-template-columns: 88px 300px 1fr; min-height: 0; position: relative; }
+.rail { display: flex; flex-direction: column; gap: 4px; padding: 10px 6px; background: #1f2633; }
+.railbtn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 4px; min-height: 72px;
+  border: 0; border-radius: var(--radius); background: transparent; color: #c9d1de; font: inherit; font-size: 13px; cursor: pointer; }
+.railbtn svg { width: 28px; height: 28px; }
+.railbtn:hover { background: #2c3546; color: #fff; }
+.railbtn[aria-pressed="true"] { background: #fff; color: var(--ink); }
+
+.drawer { background: var(--surface); border-right: 1px solid var(--line); padding: 16px; overflow: auto; }
+.drawer h2 { margin: 0 0 6px; font-size: 18px; }
+.hint { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+.addtext { display: block; width: 100%; text-align: left; margin: 0 0 10px; padding: 14px 16px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: #f6f7f9; color: var(--ink); cursor: pointer; font-family: inherit; }
+.addtext:hover { border-color: var(--muted); background: #fff; }
+.addtext.h1 { font-size: 26px; font-weight: 800; }
+.addtext.h2 { font-size: 18px; font-weight: 700; }
+.addtext.body { font-size: 14px; }
+.uploads { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+.uploads button { aspect-ratio: 1; border: 1px solid var(--line); border-radius: 8px; padding: 0; overflow: hidden; cursor: pointer; background: #f6f7f9; }
+.uploads img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.openfile { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 8px; }
+.shapegrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.shapebtn { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 8px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: #f6f7f9; color: #3b4a63; cursor: pointer; font: inherit; font-size: 14px; }
+.shapebtn svg { width: 48px; height: 48px; }
+.shapebtn:hover { background: #fff; border-color: var(--muted); }
+.swatches { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 12px; }
+.swatches button { aspect-ratio: 1; min-height: 36px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; padding: 0; }
+.swatches button[aria-pressed="true"] { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+.stage-wrap { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 10px 16px; gap: 8px; position: relative; }
+.contextbar { display: flex; align-items: center; gap: 8px; min-height: 60px; padding: 6px 8px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 12px; flex-wrap: wrap; }
+.ctx-hint { color: var(--muted); padding: 0 6px; }
+.ctx-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ctx-group.end { margin-left: auto; }
+.contextbar select { min-height: var(--tap); font: inherit; font-size: 15px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.stepper { display: flex; align-items: center; border: 1px solid var(--line); border-radius: var(--radius); }
+.stepper .btn { border: 0; font-size: 20px; min-width: 40px; }
+.stepper .size { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
+.colourbtn i { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); display: inline-block; }
+.popover { position: absolute; z-index: 30; top: 74px; left: 16px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 12px; padding: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.15); width: 300px; }
+.popover .swatches { margin: 0; }
+
+.sides { display: flex; gap: 6px; justify-content: center; }
+.sides button { min-height: 40px; padding: 0 20px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font: inherit; cursor: pointer; }
+.sides button[aria-selected="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; position: relative; }
+#canvas { touch-action: none; display: block; max-width: 100%; max-height: 100%; box-shadow: 0 2px 12px rgba(0,0,0,.12); }
+.empty-hint { position: absolute; display: flex; flex-direction: column; gap: 4px; align-items: center; text-align: center;
+  background: rgba(255,255,255,.92); border: 1px dashed var(--muted); border-radius: 12px; padding: 14px 18px; pointer-events: none; max-width: 80%; }
+.texteditor { position: absolute; z-index: 20; display: flex; gap: 6px; align-items: flex-start; background: var(--surface);
+  border: 2px solid var(--select); border-radius: 12px; padding: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.18); width: min(420px, 92%); }
+.texteditor textarea { flex: 1; font: inherit; font-size: 16px; border: 0; resize: vertical; min-height: 64px; outline: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; font-size: 12px; color: var(--muted); }
+.legend .k { display: inline-block; width: 18px; height: 0; margin-right: 6px; vertical-align: middle; }
+.legend .bleed { border-top: 2px dotted #e04444; }
+.legend .trim { border-top: 1.5px solid #222; }
+.legend .safe { border-top: 2px dashed #1f9d55; }
+.legend [data-tip]::after { top: auto; bottom: calc(100% + 8px); }
+.warnings { display: flex; flex-direction: column; gap: 6px; }
+.warnings div { background: var(--warn-bg); color: var(--warn-ink); border-radius: var(--radius); padding: 8px 12px; font-size: 14px; }
+
+/* ── print check ── */
+.sheet { position: fixed; inset: 0; background: rgba(15, 20, 30, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 60; }
+.sheet-card { background: var(--surface); border-radius: 14px; padding: 22px; width: min(500px, 100%); max-height: 90dvh; overflow: auto; }
+.sheet-card h2 { margin: 0 0 12px; font-size: 22px; }
+.checks { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.checks li { padding-left: 28px; position: relative; }
+.checks li::before { position: absolute; left: 0; top: 0; font-weight: 700; }
+.checks li.ok::before { content: "✓"; color: #1f9d55; }
+.checks li.warn::before { content: "!"; color: var(--warn-ink); background: var(--warn-bg); border-radius: 50%; width: 20px; text-align: center; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+
+/* ── loading ── */
+.loader { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 70; }
+#app:not(.loading) .loader { display: none; }
+.loader-card { text-align: center; width: min(320px, 90vw); }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+.bar div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.spinner { width: 36px; height: 36px; margin: 0 auto 12px; border: 4px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } .bar div { transition: none; } }
+
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--surface);
+  padding: 12px 18px; border-radius: var(--radius); z-index: 80; max-width: min(520px, 92vw); }
+
+/* ── phones: the rail along the bottom, the drawer as a sheet above it ── */
+@media (max-width: 860px) {
+  .modeswitch { display: none; }
+  .ordertab { top: auto; bottom: 96px; }
+  .top { padding: 6px 8px; gap: 6px; min-height: 56px; }
+  #productSize, .btn.big .lbl-sm { display: none; }
+  .btn.huge { padding: 0 14px; font-size: 16px; }
+  .work { grid-template-columns: 1fr; grid-template-rows: 1fr auto; position: relative; }
+  .rail { grid-row: 2; flex-direction: row; justify-content: space-around; padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); }
+  .railbtn { flex: 1; min-height: 60px; padding: 6px 2px; font-size: 12px; }
+  /* The drawer slides up over the design, above the rail, in the same grid cell as the design. */
+  .drawer { grid-row: 1; grid-column: 1; align-self: end; max-height: 60%; z-index: 25; border-right: 0;
+    border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; box-shadow: 0 -8px 30px rgba(0,0,0,.15); }
+  .drawer:not(.open) { display: none; }
+  .stage-wrap { grid-row: 1; grid-column: 1; padding: 8px; }
+  .contextbar { flex-wrap: nowrap; overflow-x: auto; min-height: 56px; }
+  .ctx-group { flex-wrap: nowrap; }
+  .legend { gap: 8px; font-size: 11px; }
+  .popover { left: 8px; right: 8px; width: auto; top: 70px; }
+}
+
+/* ── workspace switch: Simple (Canva-like, the default) · Advanced (InDesign-like) ── */
+.modeswitch { display: flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--bg); }
+.modeswitch button { border: 0; background: transparent; font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 999px; cursor: pointer; color: var(--muted); min-height: 34px; }
+.modeswitch button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+
+/* Advanced-only parts are out of the way in Simple mode. */
+.tools, .panels, .control, .zoombar { display: none; }
+
+/* ── Advanced: tools on the left, Control bar on top, panels on the right ── */
+#app.adv { --pro-bg: #2b2d31; --pro-panel: #34363b; --pro-line: #4a4d54; --pro-ink: #e8e9ec; --pro-muted: #a9adb5; }
+#app.adv .work { grid-template-columns: 52px 1fr 272px; }
+#app.adv .rail, #app.adv .drawer, #app.adv .contextbar, #app.adv .legend { display: none; }
+#app.adv .tools { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; background: var(--pro-bg); }
+#app.adv .panels { display: flex; flex-direction: column; background: var(--pro-panel); color: var(--pro-ink); border-left: 1px solid var(--pro-line); overflow: auto; font-size: 13px; }
+#app.adv .control { display: flex; }
+#app.adv .zoombar { display: flex; }
+#app.adv .stage { overflow: auto; display: flex; align-items: safe center; justify-content: safe center; }
+#app.adv #canvas { max-width: none; max-height: none; flex: none; margin: auto; }
+#app.adv .stage-wrap { padding: 8px 10px; }
+
+.tool { width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px;
+  background: transparent; color: var(--pro-muted, #ccc); cursor: pointer; }
+.tool:hover { background: #3d4046; color: #fff; }
+.tool[aria-pressed="true"] { background: #565a62; color: #fff; }
+.tools-sep { width: 28px; height: 1px; background: var(--pro-line, #555); margin: 6px 0; }
+
+.control { align-items: center; gap: 10px; min-height: 52px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; flex-wrap: wrap; font-size: 13px; }
+.ctl-doc { color: var(--muted); }
+.ctl-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ctl { display: inline-flex; align-items: center; gap: 4px; }
+.ctl > span { color: var(--muted); font-size: 12px; min-width: 12px; text-align: right; }
+.ctl input { width: 66px; height: 32px; font: inherit; font-variant-numeric: tabular-nums; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; }
+.ctl select { height: 32px; font: inherit; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); max-width: 132px; }
+.ctl .chip { width: 18px; height: 18px; border-radius: 3px; border: 1px solid #999; display: inline-block; }
+.ctl .chip.stroke { background: transparent !important; border-width: 4px; }
+.chip.none, .sw-chip.none { background: linear-gradient(to top right, transparent 45%, #e04444 46%, #e04444 54%, transparent 55%) #fff !important; }
+.ctl-align { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.ctl-align button { border: 0; background: var(--surface); width: 34px; height: 32px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.ctl-align button svg { width: 18px; height: 18px; }
+.ctl-align button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.btn.sm { min-height: 28px; min-width: 28px; padding: 0 8px; font-size: 13px; border-radius: 6px; }
+
+.zoombar { align-items: center; justify-content: center; gap: 6px; }
+.zoombar .btn { min-height: 32px; min-width: 32px; padding: 0 10px; font-size: 14px; }
+#zoomPct { font-variant-numeric: tabular-nums; min-width: 46px; text-align: center; }
+
+.panel { border-bottom: 1px solid var(--pro-line); }
+.panel > summary { cursor: pointer; padding: 9px 12px; font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--pro-muted); background: var(--pro-bg); list-style-position: inside; }
+.panel > :not(summary) { margin: 8px 12px; }
+.panels .btn { background: #44474d; border-color: var(--pro-line); color: var(--pro-ink); }
+.panels .btn:hover:not(:disabled) { background: #50545b; border-color: #6a6e76; }
+.panels input, .panels select { background: #2a2c30; color: var(--pro-ink); border: 1px solid var(--pro-line); border-radius: 5px; font: inherit; height: 28px; }
+
+.pages-list { display: flex; flex-wrap: wrap; gap: 10px; }
+.pages-list button { display: flex; flex-direction: column; align-items: center; gap: 4px; border: 2px solid transparent; border-radius: 6px; background: transparent; color: var(--pro-ink); padding: 4px; cursor: pointer; font: inherit; font-size: 12px; }
+.pages-list button[aria-current="true"] { border-color: #6aa1ff; }
+.pages-list img { width: 104px; height: auto; display: block; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+
+.panel-tools { display: flex; gap: 6px; justify-content: flex-end; }
+.layers-list { list-style: none; padding: 0; max-height: 260px; overflow: auto; border: 1px solid var(--pro-line); border-radius: 6px; }
+.layers-list li { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-bottom: 1px solid #3f4247; }
+.layers-list li:last-child { border-bottom: 0; }
+.layers-list li[aria-selected="true"] { background: #2f5aa8; }
+.layers-list .lname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; padding: 4px 2px; }
+.layers-list li.is-hidden .lname { opacity: .45; font-style: italic; }
+.layers-list .lflag { width: 26px; height: 26px; border: 0; border-radius: 4px; background: transparent; color: var(--pro-muted); cursor: pointer; font-size: 13px; padding: 0; }
+.layers-list .lflag[aria-pressed="true"] { color: #fff; background: #50545b; }
+.layers-list .empty { color: var(--pro-muted); font-style: italic; padding: 8px; }
+
+.fs-target { display: flex; gap: 0; border: 1px solid var(--pro-line); border-radius: 6px; overflow: hidden; width: max-content; }
+.fs-target button { border: 0; background: #2a2c30; color: var(--pro-muted); font: inherit; padding: 5px 14px; cursor: pointer; }
+.fs-target button[aria-pressed="true"] { background: #565a62; color: #fff; font-weight: 700; }
+.swatch-list { list-style: none; padding: 0; max-height: 220px; overflow: auto; border: 1px solid var(--pro-line); border-radius: 6px; }
+.swatch-list button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; color: var(--pro-ink); font: inherit; padding: 5px 8px; cursor: pointer; text-align: left; }
+.swatch-list button:hover { background: #40434a; }
+.sw-chip { width: 16px; height: 16px; border: 1px solid #888; border-radius: 2px; flex: none; }
+.swatch-new { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.swatch-new label { display: inline-flex; align-items: center; gap: 2px; color: var(--pro-muted); font-size: 12px; }
+.swatch-new input { width: 44px; padding: 0 4px; }
+.align-to { display: flex; align-items: center; gap: 8px; color: var(--pro-muted); }
+.align-btns { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+.align-btns button { height: 34px; border: 1px solid var(--pro-line); border-radius: 5px; background: #44474d; color: var(--pro-ink); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.align-btns button:hover { background: #50545b; }
+.align-btns svg { width: 20px; height: 20px; }
+
+/* ── order options: a tab on the right edge, sliding out a panel ── */
+.ordertab { position: absolute; z-index: 35; right: 0; top: 30%; display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 14px 8px; border: 1px solid var(--line); border-right: 0; border-radius: 10px 0 0 10px; background: var(--accent); color: var(--accent-ink);
+  font: inherit; font-weight: 700; font-size: 14px; cursor: pointer; box-shadow: -2px 2px 10px rgba(0,0,0,.15); }
+.ordertab span { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; }
+.ordertab:hover { background: #c9461a; }
+.orderpanel { position: absolute; z-index: 45; top: 0; right: 0; bottom: 0; width: min(340px, 92vw); background: var(--surface); color: var(--ink);
+  border-left: 1px solid var(--line); box-shadow: -10px 0 30px rgba(0,0,0,.15); padding: 14px 16px; overflow: auto;
+  transform: translateX(105%); visibility: hidden; transition: transform .22s ease, visibility 0s linear .22s; }
+.orderpanel.open { transform: none; visibility: visible; transition: transform .22s ease; }
+@media (prefers-reduced-motion: reduce) { .orderpanel, .orderpanel.open { transition: none; } }
+.op-head { display: flex; align-items: center; justify-content: space-between; }
+.op-head h2 { margin: 0; font-size: 18px; }
+.op-price { margin: 10px 0 14px; padding: 12px 14px; border-radius: var(--radius); background: var(--bg); font-size: 20px; font-weight: 800; }
+.op-price small { display: block; font-size: 13px; font-weight: 500; color: var(--muted); }
+.op-price.busy { opacity: .55; }
+.op-fields { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.op-field { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 14px; }
+.op-field select, .op-field input { min-height: var(--tap); font: inherit; font-weight: 400; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.op-field .help { font-weight: 400; font-size: 13px; color: var(--muted); }
+/* In Advanced the tab sits on the panels' edge, clear of the Layers list. */
+#app.adv .ordertab { right: 272px; }
+
+</style>
+</head>
+<body>
+  <div id="app" class="loading">
+
+    <header class="top">
+      <button id="back" class="btn ghost" type="button" data-tip="Go back to your order. Your design is kept." data-tip-pos="below-start">‹ Back</button>
+      <div class="product">
+        <strong id="productName">Postcard</strong>
+        <span id="productSize" class="muted"></span>
+      </div>
+      <div class="modeswitch" role="group" aria-label="Workspace">
+        <button id="modeSimple" type="button" aria-pressed="true" data-tip="Simple: the essentials, laid out like Canva">Simple</button>
+        <button id="modeAdv" type="button" aria-pressed="false" data-tip="Advanced: tools and panels like InDesign's print workspace, with exact sizes, positions, swatches and layers">Advanced</button>
+      </div>
+      <span id="price" class="price" hidden data-tip="Your price for this order. It doesn't change while you design."></span>
+      <div class="history">
+        <button id="undo" class="btn big" type="button" disabled aria-label="Undo" data-tip="Undo: take back your last change (Ctrl+Z)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 0 1 0 10h-3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="lbl-sm">Undo</span>
+        </button>
+        <button id="redo" class="btn big" type="button" disabled aria-label="Redo" data-tip="Redo: put back what you just undid">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 0 0 0 10h3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="lbl-sm">Redo</span>
+        </button>
+      </div>
+      <button id="print" class="btn primary huge" type="button" disabled data-tip="Check your design and make the print file. You'll see a proof before anything is printed." data-tip-pos="below-end">Print ▸</button>
+    </header>
+
+    <div id="demo" class="demo" hidden>Preview only: this design isn't connected to an order. “Print” downloads the print file.</div>
+
+    <main class="work">
+      <nav id="tools" class="tools" aria-label="Tools">
+        <button class="tool" data-tool="select" type="button" aria-pressed="true" aria-label="Selection tool" data-tip="Selection (V): select, move and resize" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3l12 9-5.5 1 3 6.5-2.5 1.2-3-6.5L6 18z" fill="currentColor"/></svg>
+        </button>
+        <button class="tool" data-tool="text" type="button" aria-pressed="false" aria-label="Type tool" data-tip="Type (T): drag to draw a text frame" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M12 5v14M9 19h6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
+        <button class="tool" data-tool="rect" type="button" aria-pressed="false" aria-label="Rectangle tool" data-tip="Rectangle (M): drag to draw" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="12" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        </button>
+        <button class="tool" data-tool="ellipse" type="button" aria-pressed="false" aria-label="Ellipse tool" data-tip="Ellipse (L): drag to draw" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="8" ry="6" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        </button>
+        <button class="tool" data-tool="line" type="button" aria-pressed="false" aria-label="Line tool" data-tip="Line (\): drag to draw a straight line, across or down" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20L20 4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
+        <button class="tool" data-tool="image" type="button" aria-pressed="false" aria-label="Image frame tool" data-tip="Image frame (F): drag a frame, then choose a photo for it" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 5l16 14M20 5L4 19" stroke="currentColor" stroke-width="1.4"/></svg>
+        </button>
+        <span class="tools-sep" aria-hidden="true"></span>
+        <button id="toolPlace" class="tool" type="button" aria-label="Place a photo" data-tip="Place (Ctrl+D): add a photo or logo" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="M4 18l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button id="toolOpen" class="tool" type="button" aria-label="Open an IDML file" data-tip="Open an InDesign (IDML) file. It replaces this design." data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+      </nav>
+
+      <nav class="rail" aria-label="Add to your design">
+        <button class="railbtn" data-cat="text" type="button" data-tip="Add a heading, a subheading or body text" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M12 5v14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg><span>Text</span>
+        </button>
+        <button class="railbtn" data-cat="photos" type="button" data-tip="Upload your own photos or logo" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="M4 18l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg><span>Photos</span>
+        </button>
+        <button class="railbtn" data-cat="shapes" type="button" data-tip="Add squares, circles, triangles and lines" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="9" height="9" rx="1" fill="currentColor"/><circle cx="16.5" cy="16.5" r="4.5" fill="currentColor"/><path d="M15 3l5 8h-10z" fill="currentColor" opacity=".6"/></svg><span>Shapes</span>
+        </button>
+        <button class="railbtn" data-cat="background" type="button" data-tip="Colour the whole side, edge to edge" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="currentColor" opacity=".25"/><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 16l6-5 5 4 7-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg><span>Background</span>
+        </button>
+      </nav>
+
+      <aside class="drawer" id="drawer" aria-live="polite">
+        <section data-panel="text">
+          <h2>Text</h2>
+          <p class="hint">Click one to add it, then type your words.</p>
+          <button class="addtext h1" data-text="heading" type="button" data-tip="A big, bold title">Add a heading</button>
+          <button class="addtext h2" data-text="subheading" type="button" data-tip="A smaller line under your title">Add a subheading</button>
+          <button class="addtext body" data-text="body" type="button" data-tip="Smaller text for details: dates, address, phone">Add a little body text</button>
+        </section>
+        <section data-panel="photos" hidden>
+          <h2>Photos</h2>
+          <button id="upload" class="btn primary huge wide" type="button" data-tip="Choose a JPEG or PNG from your computer or phone">Upload a photo</button>
+          <p class="hint">Big, sharp photos print best. Your uploads appear here so you can add them again.</p>
+          <div id="uploads" class="uploads"></div>
+          <div class="openfile">
+            <p class="hint"><strong>Have an InDesign design?</strong> Open it as IDML (in InDesign: File › Save As › InDesign Markup).</p>
+            <button id="openFile" class="btn wide" type="button" data-tip="Open an IDML file made in InDesign. It replaces this design.">Open an InDesign (IDML) file</button>
+          </div>
+          <input id="photoPick" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+          <input id="filePick" type="file" accept=".idml,.indd,.indt,.designcraft" hidden>
+        </section>
+        <section data-panel="shapes" hidden>
+          <h2>Shapes</h2>
+          <p class="hint">Click a shape to add it, then pick its colour above your design.</p>
+          <div class="shapegrid">
+            <button class="shapebtn" data-shape="square" type="button" data-tip="Square"><svg viewBox="0 0 40 40" aria-hidden="true"><rect x="6" y="6" width="28" height="28" fill="currentColor"/></svg><span>Square</span></button>
+            <button class="shapebtn" data-shape="circle" type="button" data-tip="Circle"><svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="14" fill="currentColor"/></svg><span>Circle</span></button>
+            <button class="shapebtn" data-shape="triangle" type="button" data-tip="Triangle"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 6l15 28H5z" fill="currentColor"/></svg><span>Triangle</span></button>
+            <button class="shapebtn" data-shape="line" type="button" data-tip="A straight line, for dividers"><svg viewBox="0 0 40 40" aria-hidden="true"><rect x="5" y="18" width="30" height="4" fill="currentColor"/></svg><span>Line</span></button>
+          </div>
+        </section>
+        <section data-panel="background" hidden>
+          <h2>Background</h2>
+          <p class="hint">Fills the whole side, right to the red dotted line, so no white edge shows after cutting.</p>
+          <div class="swatches" id="bgSwatches" role="group" aria-label="Background colours"></div>
+          <button id="noBackground" class="btn wide" type="button" data-tip="Take the background colour away (plain white paper)">No background</button>
+        </section>
+      </aside>
+
+      <section class="stage-wrap">
+        <div class="contextbar" id="contextbar">
+          <span id="ctxHint" class="ctx-hint">Click anything on your design to change it.</span>
+          <div id="ctxText" class="ctx-group" hidden>
+            <button id="editText" class="btn big strong" type="button" data-tip="Change the words">Edit text</button>
+            <select id="fontPick" aria-label="Font style" data-tip="Choose the look of your text">
+              <option value="clean">Clean</option>
+              <option value="classic">Classic</option>
+              <option value="modern">Modern</option>
+            </select>
+            <div class="stepper" role="group" aria-label="Text size">
+              <button id="sizeDown" class="btn" type="button" aria-label="Smaller" data-tip="Make the text smaller">−</button>
+              <span id="sizeOut" class="size" aria-live="polite"></span>
+              <button id="sizeUp" class="btn" type="button" aria-label="Bigger" data-tip="Make the text bigger">+</button>
+            </div>
+            <button id="boldBtn" class="btn toggle" type="button" aria-pressed="false" aria-label="Bold" data-tip="Bold: thicker letters"><b>B</b></button>
+            <button id="alignBtn" class="btn" type="button" aria-label="Line up the text" data-tip="Line up the text: left, centre or right">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path id="alignIcon" d="M4 6h16M7 12h10M4 18h16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <div id="ctxColour" class="ctx-group" hidden>
+            <button id="colourBtn" class="btn colourbtn" type="button" aria-haspopup="true" data-tip="Change the colour"><i id="colourDot"></i><span>Colour</span></button>
+          </div>
+          <div id="ctxPhoto" class="ctx-group" hidden>
+            <button id="fillSide" class="btn big" type="button" data-tip="Stretch the photo to the edges so no white border shows">Fill the side</button>
+            <button id="replacePhoto" class="btn big" type="button" data-tip="Swap in a different photo, keeping its size and place">Replace</button>
+          </div>
+          <div id="ctxCommon" class="ctx-group end" hidden>
+            <button id="toFront" class="btn" type="button" aria-label="Bring to front" data-tip="Bring to front: put this on top of everything">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="1" fill="currentColor"/><rect x="4" y="4" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+            <button id="toBack" class="btn" type="button" aria-label="Send to back" data-tip="Send to back: put this behind everything (but in front of the background)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="4" y="4" width="12" height="12" rx="1" fill="currentColor"/></svg>
+            </button>
+            <button id="duplicate" class="btn" type="button" aria-label="Duplicate" data-tip="Duplicate: make a copy">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 5V4H4v12h1" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+            <button id="remove" class="btn danger" type="button" aria-label="Delete" data-tip="Delete this (Delete key)" data-tip-pos="below-end">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="control" id="control" aria-label="Control">
+          <span id="ctlNone" class="ctl-doc"></span>
+          <div id="ctlObj" class="ctl-group" hidden>
+            <label class="ctl" data-tip="X: left edge from the cut line, in inches"><span>X</span><input id="ctlX" type="number" step="0.0625" inputmode="decimal"></label>
+            <label class="ctl" data-tip="Y: top edge from the cut line, in inches"><span>Y</span><input id="ctlY" type="number" step="0.0625" inputmode="decimal"></label>
+            <label class="ctl" data-tip="W: width, in inches"><span>W</span><input id="ctlW" type="number" step="0.0625" min="0" inputmode="decimal"></label>
+            <label class="ctl" data-tip="H: height, in inches"><span>H</span><input id="ctlH" type="number" step="0.0625" min="0" inputmode="decimal"></label>
+            <label class="ctl" data-tip="Rotation angle, in degrees (anticlockwise)"><span>∠</span><input id="ctlRot" type="number" step="1" inputmode="decimal"></label>
+            <label class="ctl" data-tip="Fill swatch"><span class="chip fill" id="ctlFillChip"></span><select id="ctlFill" aria-label="Fill"></select></label>
+            <label class="ctl" data-tip="Stroke swatch"><span class="chip stroke" id="ctlStrokeChip"></span><select id="ctlStroke" aria-label="Stroke"></select></label>
+            <label class="ctl" data-tip="Stroke weight, in points"><span>pt</span><input id="ctlWeight" type="number" step="0.25" min="0" inputmode="decimal"></label>
+            <label class="ctl" data-tip="Opacity, in percent"><span>%</span><input id="ctlOpacity" type="number" step="5" min="0" max="100" inputmode="decimal"></label>
+          </div>
+          <div id="ctlText" class="ctl-group" hidden>
+            <button id="ctlEdit" class="btn" type="button" data-tip="Edit the words (Enter)">Edit text</button>
+            <label class="ctl" data-tip="Font family"><select id="ctlFont" aria-label="Font family"></select></label>
+            <label class="ctl" data-tip="Font style"><select id="ctlStyle" aria-label="Font style"></select></label>
+            <label class="ctl" data-tip="Font size, in points"><span>T</span><input id="ctlSize" type="number" step="0.5" min="1" max="1296" inputmode="decimal"></label>
+            <label class="ctl" data-tip="Leading (line spacing), in points. Empty is Auto."><span>A</span><input id="ctlLeading" type="number" step="0.5" min="0" placeholder="Auto" inputmode="decimal"></label>
+            <label class="ctl" data-tip="Tracking (letter spacing), in thousandths of an em"><span>VA</span><input id="ctlTracking" type="number" step="10" inputmode="decimal"></label>
+            <div class="ctl-align" role="group" aria-label="Paragraph alignment">
+              <button type="button" data-palign="left" aria-label="Align left" data-tip="Align left"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+              <button type="button" data-palign="center" aria-label="Align centre" data-tip="Align centre"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M4 18h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+              <button type="button" data-palign="right" aria-label="Align right" data-tip="Align right"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M10 12h10M4 18h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+              <button type="button" data-palign="leftJustified" aria-label="Justify" data-tip="Justify (last line left)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+            </div>
+          </div>
+        </div>
+        <div id="colourPop" class="popover" hidden>
+          <div class="swatches" id="swatches" role="group" aria-label="Colours"></div>
+        </div>
+
+        <div class="sides" role="tablist" id="sides"></div>
+        <div class="stage" id="stage">
+          <canvas id="canvas" aria-label="Your design"></canvas>
+          <div id="emptyHint" class="empty-hint" hidden>
+            <strong>Start here</strong>
+            <span>Add a heading from <b>Text</b>, or upload a photo from <b>Photos</b>.</span>
+          </div>
+          <div id="textEditor" class="texteditor" hidden>
+            <textarea id="textInput" rows="3" aria-label="Your words"></textarea>
+            <button id="textDone" class="btn primary" type="button">Done</button>
+          </div>
+        </div>
+        <div class="legend">
+          <span data-tip="Backgrounds and photos that go to the edge should reach this line"><i class="k bleed"></i>Background reaches here</span>
+          <span data-tip="Where the card is cut"><i class="k trim"></i>Cut line</span>
+          <span data-tip="Keep words and faces inside this line so nothing important is cut off"><i class="k safe"></i>Keep words inside</span>
+        </div>
+        <div class="zoombar" aria-label="Zoom">
+          <button id="zoomOut" class="btn" type="button" aria-label="Zoom out" data-tip="Zoom out (Ctrl −)">−</button>
+          <button id="zoomFit" class="btn" type="button" data-tip="Fit the page in the window (Ctrl 0)"><span id="zoomPct">100%</span></button>
+          <button id="zoomIn" class="btn" type="button" aria-label="Zoom in" data-tip="Zoom in (Ctrl +)">+</button>
+        </div>
+        <div id="warnings" class="warnings" aria-live="polite"></div>
+      </section>
+
+      <aside id="panels" class="panels" aria-label="Panels">
+        <details class="panel" open>
+          <summary>Pages</summary>
+          <div id="pagesList" class="pages-list"></div>
+        </details>
+        <details class="panel" open>
+          <summary>Layers</summary>
+          <div class="panel-tools">
+            <button id="layerUp" class="btn sm" type="button" aria-label="Bring forward" data-tip="Bring forward">▲</button>
+            <button id="layerDown" class="btn sm" type="button" aria-label="Send backward" data-tip="Send backward">▼</button>
+          </div>
+          <ul id="layersList" class="layers-list"></ul>
+        </details>
+        <details class="panel" open>
+          <summary>Swatches</summary>
+          <div class="fs-target" role="group" aria-label="Apply swatches to">
+            <button id="fsFill" type="button" aria-pressed="true" data-tip="Clicking a swatch sets the fill">Fill</button>
+            <button id="fsStroke" type="button" aria-pressed="false" data-tip="Clicking a swatch sets the stroke">Stroke</button>
+          </div>
+          <ul id="swatchList" class="swatch-list"></ul>
+          <form id="swatchNew" class="swatch-new" autocomplete="off">
+            <label>C<input name="c" type="number" min="0" max="100" value="0"></label>
+            <label>M<input name="m" type="number" min="0" max="100" value="0"></label>
+            <label>Y<input name="y" type="number" min="0" max="100" value="0"></label>
+            <label>K<input name="k" type="number" min="0" max="100" value="100"></label>
+            <button class="btn sm" type="submit" data-tip="Make a CMYK swatch from these values">New</button>
+          </form>
+        </details>
+        <details class="panel" open>
+          <summary>Align</summary>
+          <label class="align-to">Align to
+            <select id="alignTo">
+              <option value="trim">Cut line (page)</option>
+              <option value="safe">Safe area</option>
+              <option value="bleed">Bleed</option>
+            </select>
+          </label>
+          <div class="align-btns">
+            <button type="button" data-oalign="left" aria-label="Align left edges" data-tip="Align left edges"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v18" stroke="currentColor" stroke-width="2"/><rect x="7" y="6" width="12" height="4" fill="currentColor"/><rect x="7" y="14" width="7" height="4" fill="currentColor"/></svg></button>
+            <button type="button" data-oalign="hcenter" aria-label="Align horizontal centres" data-tip="Align horizontal centres"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18" stroke="currentColor" stroke-width="2"/><rect x="5" y="6" width="14" height="4" fill="currentColor"/><rect x="8" y="14" width="8" height="4" fill="currentColor"/></svg></button>
+            <button type="button" data-oalign="right" aria-label="Align right edges" data-tip="Align right edges"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 3v18" stroke="currentColor" stroke-width="2"/><rect x="5" y="6" width="12" height="4" fill="currentColor"/><rect x="10" y="14" width="7" height="4" fill="currentColor"/></svg></button>
+            <button type="button" data-oalign="top" aria-label="Align top edges" data-tip="Align top edges"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18" stroke="currentColor" stroke-width="2"/><rect x="6" y="7" width="4" height="12" fill="currentColor"/><rect x="14" y="7" width="4" height="7" fill="currentColor"/></svg></button>
+            <button type="button" data-oalign="vcenter" aria-label="Align vertical centres" data-tip="Align vertical centres"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18" stroke="currentColor" stroke-width="2"/><rect x="6" y="5" width="4" height="14" fill="currentColor"/><rect x="14" y="8" width="4" height="8" fill="currentColor"/></svg></button>
+            <button type="button" data-oalign="bottom" aria-label="Align bottom edges" data-tip="Align bottom edges"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18" stroke="currentColor" stroke-width="2"/><rect x="6" y="5" width="4" height="12" fill="currentColor"/><rect x="14" y="10" width="4" height="7" fill="currentColor"/></svg></button>
+          </div>
+        </details>
+      </aside>
+
+      <button id="orderTab" class="ordertab" type="button" hidden aria-expanded="false" aria-controls="orderPanel" data-tip="Change the size, sides and quantity of your order" data-tip-pos="left">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 12h16M4 17h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="17" cy="7" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="14" cy="17" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        <span>Order options</span>
+      </button>
+      <aside id="orderPanel" class="orderpanel" aria-label="Order options">
+        <div class="op-head">
+          <h2>Your order</h2>
+          <button id="orderClose" class="btn ghost" type="button" aria-label="Close order options">✕</button>
+        </div>
+        <div id="orderPrice" class="op-price" aria-live="polite"></div>
+        <div id="orderFields" class="op-fields"></div>
+        <p class="hint">Changing the size or sides changes your price. Your design is moved and scaled to fit the new size.</p>
+      </aside>
+    </main>
+
+    <div id="sheet" class="sheet" hidden>
+      <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+        <h2 id="sheetTitle">Ready to print?</h2>
+        <ul id="checks" class="checks"></ul>
+        <p class="muted small">Next, you'll see a proof of exactly what will print and approve it before anything is made.</p>
+        <div class="row end">
+          <button id="sheetCancel" class="btn big" type="button">Keep designing</button>
+          <button id="sheetGo" class="btn primary huge" type="button">Looks good, continue</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="loader" class="loader">
+      <div class="loader-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <p id="loadMsg">Getting the designer ready…</p>
+        <div class="bar"><div id="loadBar"></div></div>
+      </div>
+    </div>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </div>
+  <script type="application/json" id="designer-manifest">{"wasm":"pps-designer-5431e71a8b93170f32a2541ff767db1eeb936caa.wasm.gz","wasmBytes":23975049,"wasmFileBytes":9744397,"sha":"5431e71a8b93170f32a2541ff767db1eeb936caa"}</script>
+  <script type="module">
+// PPS Designer: the editor customers see.
+//
+// One page, plain JS, no framework. Two workspaces over the same document:
+//   Simple (the default), laid out the way people know from Canva: a rail of four things to add
+//   (Text, Photos, Shapes, Background), a drawer for the one that's open, a toolbar above the
+//   design for whatever is selected, and the design itself.
+//   Advanced, laid out like InDesign's print workspace: tools on the left, a Control bar of exact
+//   values (X, Y, W, H in inches, rotation, fill, stroke, opacity, type), and Pages, Layers,
+//   Swatches and Align panels on the right, with zoom.
+// Both have Order options: a tab on the right that slides out the order's size, sides and
+// quantity, as the calculator offers them; a change goes back to the calculator, which re-prices
+// and, for a new size or sides, sends the new spec, and the design follows. Everything the customer does
+// is an engine command through the bridge (crates/pps-bridge), so undo, the preview and the print
+// file all come from the same document. The calculator that opens this page owns the product spec,
+// the price and the cart; this page only designs and hands back a print file (brief §6, CLAUDE.md).
+//
+// Units: the engine works in points (72 per inch) with the trim's top-left corner at 0,0.
+// The canvas shows the page plus its bleed.
+
+const { init, Designer } = (() => {
+/**
+ * The JavaScript face of [`Bridge`]: `new Designer()`, then commands, renders and exports.
+ */
+class Designer {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        DesignerFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_designer_free(ptr, 0);
+    }
+    /**
+     * Run an engine command; returns its result as JSON text.
+     * @param {string} command
+     * @param {string} params_json
+     * @returns {string}
+     */
+    execute(command, params_json) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(command, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(params_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.designer_execute(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * @param {string} opts_json
+     * @returns {Uint8Array}
+     */
+    exportPdf(opts_json) {
+        const ptr0 = passStringToWasm0(opts_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.designer_exportPdf(this.__wbg_ptr, ptr0, len0);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+    constructor() {
+        const ret = wasm.designer_new();
+        this.__wbg_ptr = ret;
+        DesignerFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+    /**
+     * @param {string} design
+     * @returns {string}
+     */
+    openDesign(design) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(design, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.designer_openDesign(this.__wbg_ptr, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Open an IDML package or saved design; an InDesign `.indd` throws `indd-unsupported`.
+     * @param {Uint8Array} bytes
+     * @param {string} name
+     * @returns {string}
+     */
+    openFile(bytes, name) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.designer_openFile(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * @param {Uint8Array} bytes
+     * @param {string} name
+     * @param {number} frame
+     * @returns {string}
+     */
+    placeImage(bytes, name, frame) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.designer_placeImage(this.__wbg_ptr, ptr0, len0, ptr1, len1, frame);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * @param {number} page
+     * @param {number} scale
+     * @param {boolean} bleed
+     * @returns {Page}
+     */
+    renderPage(page, scale, bleed) {
+        const ret = wasm.designer_renderPage(this.__wbg_ptr, page, scale, bleed);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Page.__wrap(ret[0]);
+    }
+    /**
+     * @returns {string}
+     */
+    saveDesign() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.designer_saveDesign(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+}
+if (Symbol.dispose) Designer.prototype[Symbol.dispose] = Designer.prototype.free;
+
+/**
+ * A rendered page for canvas: `width`, `height` and straight RGBA bytes.
+ */
+class Page {
+    static __wrap(ptr) {
+        const obj = Object.create(Page.prototype);
+        obj.__wbg_ptr = ptr;
+        PageFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        PageFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_page_free(ptr, 0);
+    }
+    /**
+     * @returns {number}
+     */
+    get height() {
+        const ret = wasm.page_height(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * The pixels, copied out once (use with `new ImageData(new Uint8ClampedArray(p.rgba), w, h)`).
+     * @returns {Uint8Array}
+     */
+    get rgba() {
+        const ret = wasm.page_rgba(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * @returns {number}
+     */
+    get width() {
+        const ret = wasm.page_width(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+}
+if (Symbol.dispose) Page.prototype[Symbol.dispose] = Page.prototype.free;
+function __wbg_get_imports() {
+    const import0 = {
+        __proto__: null,
+        __wbg_Error_30c8987f7c2ed4e2: function(arg0, arg1) {
+            const ret = Error(getStringFromWasm0(arg0, arg1));
+            return ret;
+        },
+        __wbg___wbindgen_throw_41e9ee4f547fc59a: function(arg0, arg1) {
+            throw new Error(getStringFromWasm0(arg0, arg1));
+        },
+        __wbindgen_init_externref_table: function() {
+            const table = wasm.__wbindgen_externrefs;
+            const offset = table.grow(4);
+            table.set(0, undefined);
+            table.set(offset + 0, undefined);
+            table.set(offset + 1, null);
+            table.set(offset + 2, true);
+            table.set(offset + 3, false);
+        },
+    };
+    return {
+        __proto__: null,
+        "./pps_bridge_bg.js": import0,
+    };
+}
+
+const DesignerFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_designer_free(ptr, 1));
+const PageFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_page_free(ptr, 1));
+
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
+function getStringFromWasm0(ptr, len) {
+    return decodeText(ptr >>> 0, len);
+}
+
+let cachedUint8ArrayMemory0 = null;
+function getUint8ArrayMemory0() {
+    if (cachedUint8ArrayMemory0 === null || cachedUint8ArrayMemory0.byteLength === 0) {
+        cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
+    }
+    return cachedUint8ArrayMemory0;
+}
+
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passStringToWasm0(arg, malloc, realloc) {
+    if (realloc === undefined) {
+        const buf = cachedTextEncoder.encode(arg);
+        const ptr = malloc(buf.length, 1) >>> 0;
+        getUint8ArrayMemory0().subarray(ptr, ptr + buf.length).set(buf);
+        WASM_VECTOR_LEN = buf.length;
+        return ptr;
+    }
+
+    let len = arg.length;
+    let ptr = malloc(len, 1) >>> 0;
+
+    const mem = getUint8ArrayMemory0();
+
+    let offset = 0;
+
+    for (; offset < len; offset++) {
+        const code = arg.charCodeAt(offset);
+        if (code > 0x7F) break;
+        mem[ptr + offset] = code;
+    }
+    if (offset !== len) {
+        if (offset !== 0) {
+            arg = arg.slice(offset);
+        }
+        ptr = realloc(ptr, len, len = offset + arg.length * 3, 1) >>> 0;
+        const view = getUint8ArrayMemory0().subarray(ptr + offset, ptr + len);
+        const ret = cachedTextEncoder.encodeInto(arg, view);
+
+        offset += ret.written;
+        ptr = realloc(ptr, len, offset, 1) >>> 0;
+    }
+
+    WASM_VECTOR_LEN = offset;
+    return ptr;
+}
+
+function takeFromExternrefTable0(idx) {
+    const value = wasm.__wbindgen_externrefs.get(idx);
+    wasm.__externref_table_dealloc(idx);
+    return value;
+}
+
+let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
+cachedTextDecoder.decode();
+const MAX_SAFARI_DECODE_BYTES = 2146435072;
+let numBytesDecoded = 0;
+function decodeText(ptr, len) {
+    numBytesDecoded += len;
+    if (numBytesDecoded >= MAX_SAFARI_DECODE_BYTES) {
+        cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
+        cachedTextDecoder.decode();
+        numBytesDecoded = len;
+    }
+    return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len));
+}
+
+const cachedTextEncoder = new TextEncoder();
+
+if (!('encodeInto' in cachedTextEncoder)) {
+    cachedTextEncoder.encodeInto = function (arg, view) {
+        const buf = cachedTextEncoder.encode(arg);
+        view.set(buf);
+        return {
+            read: arg.length,
+            written: buf.length
+        };
+    };
+}
+
+let WASM_VECTOR_LEN = 0;
+
+let wasmModule, wasmInstance, wasm;
+function __wbg_finalize_init(instance, module) {
+    wasmInstance = instance;
+    wasm = instance.exports;
+    wasmModule = module;
+    cachedUint8ArrayMemory0 = null;
+    wasm.__wbindgen_start();
+    return wasm;
+}
+
+async function __wbg_load(module, imports) {
+    if (typeof Response === 'function' && module instanceof Response) {
+        if (!module.ok) {
+            throw new Error(`failed to fetch Wasm: ${module.status} ${module.statusText} fetching '${module.url}'`);
+        }
+
+        if (typeof WebAssembly.instantiateStreaming === 'function') {
+            try {
+                return await WebAssembly.instantiateStreaming(module, imports);
+            } catch (e) {
+                const validResponse = expectedResponseType(module.type);
+
+                if (validResponse && module.headers.get('Content-Type') !== 'application/wasm') {
+                    console.warn("`WebAssembly.instantiateStreaming` failed because your server does not serve Wasm with `application/wasm` MIME type. Falling back to `WebAssembly.instantiate` which is slower. Original error:\n", e);
+
+                } else { throw e; }
+            }
+        }
+
+        const bytes = await module.arrayBuffer();
+        return await WebAssembly.instantiate(bytes, imports);
+    } else {
+        const instance = await WebAssembly.instantiate(module, imports);
+
+        if (instance instanceof WebAssembly.Instance) {
+            return { instance, module };
+        } else {
+            return instance;
+        }
+    }
+
+    function expectedResponseType(type) {
+        switch (type) {
+            case 'basic': case 'cors': case 'default': return true;
+        }
+        return false;
+    }
+}
+
+function initSync(module) {
+    if (wasm !== undefined) return wasm;
+
+
+    if (module !== undefined) {
+        if (Object.getPrototypeOf(module) === Object.prototype) {
+            ({module} = module)
+        } else {
+            console.warn('using deprecated parameters for `initSync()`; pass a single object instead')
+        }
+    }
+
+    const imports = __wbg_get_imports();
+    if (!(module instanceof WebAssembly.Module)) {
+        module = new WebAssembly.Module(module);
+    }
+    const instance = new WebAssembly.Instance(module, imports);
+    return __wbg_finalize_init(instance, module);
+}
+
+async function __wbg_init(module_or_path) {
+    if (wasm !== undefined) return wasm;
+
+
+    if (module_or_path !== undefined) {
+        if (Object.getPrototypeOf(module_or_path) === Object.prototype) {
+            ({module_or_path} = module_or_path)
+        } else {
+            console.warn('using deprecated parameters for the initialization function; pass a single object instead')
+        }
+    }
+
+    if (module_or_path === undefined) {
+        module_or_path = new URL('pps_bridge_bg.wasm', import.meta.url);
+    }
+    const imports = __wbg_get_imports();
+
+    if (typeof module_or_path === 'string' || (typeof Request === 'function' && module_or_path instanceof Request) || (typeof URL === 'function' && module_or_path instanceof URL)) {
+        module_or_path = fetch(module_or_path);
+    }
+
+    const { instance, module } = await __wbg_load(await module_or_path, imports);
+
+    return __wbg_finalize_init(instance, module);
+}
+
+
+
+return { init: __wbg_init, Designer };
+})();
+
+const PROTOCOL = 1;
+const OUTPUT_INTENT = 'DesignCraft Generic CMYK (SWOP-like)';
+const LOW_PPI = 150;
+const INDD_UNSUPPORTED = 'indd-unsupported';
+
+// Print colours: CMYK for the press, an sRGB stand-in for the button.
+const COLOURS = [
+  { name: 'Black', cmyk: [0, 0, 0, 100], css: '#231f20', swatch: '[Black]' },
+  { name: 'White', cmyk: [0, 0, 0, 0], css: '#ffffff', swatch: '[Paper]' },
+  { name: 'Grey', cmyk: [0, 0, 0, 50], css: '#939598' },
+  { name: 'Red', cmyk: [0, 95, 85, 0], css: '#e5252f' },
+  { name: 'Orange', cmyk: [0, 60, 100, 0], css: '#f7941d' },
+  { name: 'Yellow', cmyk: [0, 10, 95, 0], css: '#ffe014' },
+  { name: 'Green', cmyk: [75, 0, 100, 0], css: '#39b54a' },
+  { name: 'Teal', cmyk: [80, 10, 45, 0], css: '#00a79d' },
+  { name: 'Blue', cmyk: [100, 60, 0, 0], css: '#0067b1' },
+  { name: 'Navy', cmyk: [100, 85, 20, 30], css: '#1b3664' },
+  { name: 'Purple', cmyk: [65, 90, 0, 0], css: '#6e3a96' },
+  { name: 'Pink', cmyk: [0, 70, 10, 0], css: '#ee6fa4' },
+];
+const FONTS = {
+  clean: { family: 'Source Sans 3', regular: 'Regular', bold: 'Bold' },
+  classic: { family: 'Source Serif 4', regular: 'Regular', bold: 'Bold' },
+  modern: { family: 'Inter', regular: 'Regular', bold: 'SemiBold' },
+};
+const ALIGNS = ['left', 'center', 'right'];
+const ALIGN_ICON = { left: 'M4 6h16M4 12h10M4 18h16', center: 'M4 6h16M7 12h10M4 18h16', right: 'M4 6h16M10 12h10M4 18h16' };
+
+// The bundled typefaces (crates/fonts, OFL) and their styles, for the Control bar.
+const FAMILIES = {
+  'Source Sans 3': ['Regular', 'Italic', 'Semibold', 'Bold'],
+  'Source Serif 4': ['Regular', 'Italic', 'Semibold', 'Bold', 'Bold Italic'],
+  'Inter': ['Regular', 'Medium', 'SemiBold'],
+  'JetBrains Mono': ['Regular'],
+};
+const MODE_KEY = 'pps-designer-mode';
+const TOOL_KEYS = { v: 'select', t: 'text', m: 'rect', l: 'ellipse', '\\': 'line', f: 'image' };
+
+const $ = id => document.getElementById(id);
+const el = {
+  app: $('app'), canvas: $('canvas'), stage: $('stage'), sides: $('sides'), warnings: $('warnings'),
+  undo: $('undo'), redo: $('redo'), print: $('print'), back: $('back'), price: $('price'), demo: $('demo'),
+  productName: $('productName'), productSize: $('productSize'), photoPick: $('photoPick'), filePick: $('filePick'),
+  drawer: $('drawer'), uploads: $('uploads'), swatches: $('swatches'), bgSwatches: $('bgSwatches'),
+  ctxHint: $('ctxHint'), ctxText: $('ctxText'), ctxColour: $('ctxColour'), ctxPhoto: $('ctxPhoto'), ctxCommon: $('ctxCommon'),
+  colourPop: $('colourPop'), colourDot: $('colourDot'), fontPick: $('fontPick'), boldBtn: $('boldBtn'),
+  sizeOut: $('sizeOut'), alignIcon: $('alignIcon'), textEditor: $('textEditor'), textInput: $('textInput'),
+  emptyHint: $('emptyHint'), sheet: $('sheet'), checks: $('checks'), loader: $('loader'), loadMsg: $('loadMsg'),
+  loadBar: $('loadBar'), toast: $('toast'),
+  modeSimple: $('modeSimple'), modeAdv: $('modeAdv'), control: $('control'), ctlNone: $('ctlNone'), ctlObj: $('ctlObj'), ctlText: $('ctlText'),
+  ctlX: $('ctlX'), ctlY: $('ctlY'), ctlW: $('ctlW'), ctlH: $('ctlH'), ctlRot: $('ctlRot'), ctlFill: $('ctlFill'), ctlStroke: $('ctlStroke'),
+  ctlFillChip: $('ctlFillChip'), ctlStrokeChip: $('ctlStrokeChip'), ctlWeight: $('ctlWeight'), ctlOpacity: $('ctlOpacity'),
+  ctlFont: $('ctlFont'), ctlStyle: $('ctlStyle'), ctlSize: $('ctlSize'), ctlLeading: $('ctlLeading'), ctlTracking: $('ctlTracking'),
+  pagesList: $('pagesList'), layersList: $('layersList'), swatchList: $('swatchList'), swatchNew: $('swatchNew'), alignTo: $('alignTo'),
+  fsFill: $('fsFill'), fsStroke: $('fsStroke'), zoomPct: $('zoomPct'),
+  orderTab: $('orderTab'), orderPanel: $('orderPanel'), orderPrice: $('orderPrice'), orderFields: $('orderFields'),
+};
+
+const S = {
+  d: null,               // the bridge
+  embedded: window.parent !== window,
+  spec: null,            // {w, h, bleed, safety, pages} in points
+  page: 0,
+  items: [],             // current page's items from document.inspect, back to front
+  stories: new Map(),    // story id → {overset}
+  sel: null,             // selected item id
+  k: 1, dpr: 1,          // CSS px per point; device pixel ratio
+  pageCanvas: document.createElement('canvas'),
+  canUndo: false, canRedo: false,
+  style: new Map(),      // text frame id → {font, bold, size, align, colour}
+  colour: new Map(),     // shape id → colour name, for the toolbar's dot
+  imagePx: new Map(),    // image frame id → [width, height] in pixels, when placed here
+  uploads: [],           // photos uploaded this session: {name, bytes, dims, url}
+  swatchNames: new Map(),
+  drag: null,
+  dirty: false,
+  replaceInto: null,
+  cat: 'text',           // the open drawer
+  mode: 'simple',        // 'simple' | 'adv'
+  tool: 'select',        // Advanced tools: select | text | rect | ellipse | line | image
+  zoom: 1,               // Advanced zoom, relative to fitting the page in the window
+  fsTarget: 'fill',      // Swatches panel: fill or stroke
+  allItems: [],          // current page's items including hidden ones (Layers panel)
+  swatches: [],          // the document's swatch names
+  opacity: new Map(),    // item id → opacity %, when set here
+  options: [],           // Order options from the calculator: [{key, label, type, value, choices?, min?, max?, step?, help?}]
+  lastOption: null,      // {key, prev}: the change waiting on the calculator, to put back if refused
+  price: null,           // the last price the calculator sent (display only)
+  undoFloor: 0,          // undo history length when the order's size last changed: undo stops there
+  undoDepth: 0,
+};
+
+// ── the bridge ────────────────────────────────────────────────
+
+function run(command, params = {}) {
+  const out = S.d.execute(command, JSON.stringify(params));
+  return out ? JSON.parse(out) : null;
+}
+
+function tryRun(command, params, failMsg) {
+  try { return run(command, params); }
+  catch (e) { toast(failMsg || 'Something went wrong. Please try again.'); console.error(command, e); return undefined; }
+}
+
+function changed() {
+  S.dirty = true;
+  S.canRedo = false;
+  refresh();
+}
+
+// ── loading ───────────────────────────────────────────────────
+
+// The engine ships gzip-compressed (pps_bridge_bg.wasm.gz, named in designer-manifest.json):
+// 9 MB instead of 23, which fits the store's 12 MB pull-deploy cap and downloads quickly from a
+// server that doesn't compress .wasm itself. The page unpacks it with DecompressionStream. If a
+// server does decompress it on the way (Content-Encoding: gzip), the bytes already start with the
+// wasm magic number and are used as they are. The one-file release (shell/bundle.mjs) carries its
+// manifest inside the page, as #designer-manifest; the plain build fetches it.
+async function loadEngine() {
+  let file = 'pps_bridge_bg.wasm', total = 0;
+  try {
+    const inline = document.getElementById('designer-manifest');
+    let man = null;
+    if (inline) man = JSON.parse(inline.textContent);
+    else {
+      const m = await fetch('designer-manifest.json', { cache: 'no-store' });
+      if (m.ok) man = await m.json();
+    }
+    if (man) {
+      if (typeof man.wasm === 'string' && /^[\w.-]+$/.test(man.wasm)) file = man.wasm;
+      total = man.wasmFileBytes || man.wasmBytes || 0;
+    }
+  } catch { /* the bar falls back to the byte count */ }
+  const res = await fetch(file);
+  if (!res.ok || !res.body) throw new Error('could not download the designer (' + res.status + ')');
+  const reader = res.body.getReader();
+  const parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    got += value.length;
+    el.loadMsg.textContent = 'Getting the designer ready… ' + (got / 1048576).toFixed(1) + ' MB';
+    if (total) el.loadBar.style.width = Math.min(100, (got / total) * 100).toFixed(1) + '%';
+  }
+  let bytes = new Uint8Array(got);
+  let off = 0;
+  for (const p of parts) { bytes.set(p, off); off += p.length; }
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    if (typeof DecompressionStream !== 'function') throw new Error('this browser is too old to open the designer');
+    el.loadMsg.textContent = 'Unpacking…';
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  el.loadMsg.textContent = 'Almost there…';
+  await init({ module_or_path: bytes });
+  S.d = new Designer();
+}
+
+// ── the job (from the calculator, or a demo when opened on its own) ──
+
+function validSpec(spec) {
+  const n = v => typeof v === 'number' && Number.isFinite(v);
+  if (!spec || typeof spec !== 'object') return 'no spec';
+  if (!n(spec.trimW) || !n(spec.trimH) || spec.trimW <= 0 || spec.trimH <= 0 || spec.trimW > 5000 || spec.trimH > 5000) return 'trim size';
+  if (spec.bleed != null && (!n(spec.bleed) || spec.bleed < 0 || spec.bleed > 72)) return 'bleed';
+  if (spec.safety != null && (!n(spec.safety) || spec.safety < 0 || spec.safety > 144)) return 'safety';
+  if (!Number.isInteger(spec.pages) || spec.pages < 1 || spec.pages > 64) return 'pages';
+  if (spec.pageMultiple != null && (!Number.isInteger(spec.pageMultiple) || spec.pageMultiple < 1 || spec.pages % spec.pageMultiple)) return 'page multiple';
+  return null;
+}
+
+function resetLocalState() {
+  S.style.clear(); S.colour.clear(); S.imagePx.clear(); S.swatchNames.clear(); S.sel = null; S.page = 0;
+}
+
+function startJob(job) {
+  const bad = validSpec(job && job.spec);
+  if (bad) throw new Error('the job spec is not usable (' + bad + ')');
+  const sp = job.spec;
+  S.spec = { w: sp.trimW, h: sp.trimH, bleed: sp.bleed ?? 9, safety: sp.safety ?? 9, pages: sp.pages };
+  resetLocalState();
+  let opened = false;
+  if (typeof job.design === 'string' && job.design) {
+    try { S.d.openDesign(job.design); opened = true; }
+    catch (e) { console.warn('saved design could not be reopened; starting fresh', e); }
+  }
+  if (!opened) {
+    run('file.new', { width: S.spec.w, height: S.spec.h, pages: S.spec.pages, facingPages: false,
+      bleed: S.spec.bleed, margins: S.spec.safety, title: el.productName.textContent });
+  }
+  const inches = v => +(v / 72).toFixed(3);
+  el.productSize.textContent = inches(S.spec.w) + ' × ' + inches(S.spec.h) + ' in';
+  buildSides();
+  S.dirty = opened;
+  S.undoFloor = 0;
+  if (Array.isArray(job.options)) setOptions(job.options);
+  el.print.disabled = false;
+  layout();
+}
+
+function demoJob() {
+  const q = new URLSearchParams(location.search);
+  const num = (k, d) => { const v = parseFloat(q.get(k)); return Number.isFinite(v) && v > 0 ? v : d; };
+  const w = num('w', 9), h = num('h', 6), pages = Math.round(num('pages', 2));
+  if (q.get('product')) el.productName.textContent = q.get('product').slice(0, 60);
+  const size = DEMO_SIZES.find(([l, s]) => l === Math.max(w, h) && s === Math.min(w, h));
+  if (size) DEMO.size = size[0] + 'x' + size[1];
+  DEMO.orientation = h > w ? 'portrait' : 'landscape';
+  DEMO.sides = String(pages);
+  return { spec: { trimW: w * 72, trimH: h * 72, bleed: 9, safety: 9, pages, pageMultiple: 1, folds: [], bindEdge: null, spine: 0 },
+           options: size && pages <= 2 ? demoOptions() : [] };
+}
+
+// ── messages with the calculator (same origin only) ──────────
+
+function post(type, payload = {}, transfer) {
+  if (!S.embedded) return;
+  window.parent.postMessage({ type, v: PROTOCOL, ...payload }, location.origin, transfer || []);
+}
+
+window.addEventListener('message', ev => {
+  if (ev.origin !== location.origin || ev.source !== window.parent) return;
+  const m = ev.data;
+  if (!m || typeof m !== 'object' || m.v !== PROTOCOL || typeof m.type !== 'string') return;
+  if (m.type === 'pps-design:job') {
+    if (!S.d) return;
+    try { startJob(m); }
+    catch (e) { post('pps-design:error', { message: String(e.message || e) }); showFatal('This product can\'t be designed online yet.'); }
+  } else if (m.type === 'pps-design:price') {
+    showPrice(m);
+  } else if (m.type === 'pps-design:options') {
+    if (Array.isArray(m.options)) setOptions(m.options);
+  } else if (m.type === 'pps-design:spec') {
+    if (S.d && S.spec) applySpec(m.spec);
+  }
+});
+
+// Display only. The calculator computes the price; nothing here does.
+function showPrice(m) {
+  const t = m && m.total;
+  if (typeof t === 'number' && Number.isFinite(t)) {
+    S.price = { total: t, qty: Number.isInteger(m.qty) ? m.qty : null, turnaround: m.turnaround };
+    el.price.textContent = '$' + t.toFixed(2) + (S.price.qty != null ? ' · ' + S.price.qty.toLocaleString() + ' pcs' : '');
+    el.price.hidden = false;
+  } else { S.price = null; el.price.hidden = true; }
+  renderOrderPrice();
+}
+
+// ── layout and drawing ───────────────────────────────────────
+
+function sideName(i) {
+  if (S.spec.pages === 1) return 'Your design';
+  if (S.spec.pages === 2) return i === 0 ? 'Front' : 'Back';
+  return 'Page ' + (i + 1);
+}
+
+function buildSides() {
+  el.sides.textContent = '';
+  if (S.spec.pages < 2) return;
+  for (let i = 0; i < S.spec.pages; i++) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.role = 'tab'; b.textContent = sideName(i);
+    b.addEventListener('click', () => { S.page = i; select(null); refresh(); });
+    el.sides.appendChild(b);
+  }
+}
+
+function layout() {
+  if (!S.spec) return;
+  const W = S.spec.w + 2 * S.spec.bleed, H = S.spec.h + 2 * S.spec.bleed;
+  const pad = 8;
+  // offsetWidth, not clientWidth: a zoomed design's scrollbars must not change the fit (and loop).
+  const fit = Math.max(0.05, Math.min((el.stage.offsetWidth - pad * 2) / W, (el.stage.offsetHeight - pad * 2) / H));
+  S.k = S.mode === 'adv' ? Math.max(0.05, fit * S.zoom) : fit;
+  if (el.zoomPct) el.zoomPct.textContent = Math.round(S.k / (96 / 72) * 100) + '%';
+  S.dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const cw = Math.floor(W * S.k), ch = Math.floor(H * S.k);
+  el.canvas.style.width = cw + 'px';
+  el.canvas.style.height = ch + 'px';
+  el.canvas.width = Math.round(cw * S.dpr);
+  el.canvas.height = Math.round(ch * S.dpr);
+  refresh();
+}
+
+let renderQueued = false;
+function refresh() {
+  if (!S.d || !S.spec) return;
+  readDocument();
+  if (!renderQueued) {
+    renderQueued = true;
+    requestAnimationFrame(() => { renderQueued = false; renderPage(); draw(); placeTextEditor(); });
+  }
+  updateChrome();
+}
+
+function readDocument() {
+  const ins = run('document.inspect');
+  try { S.undoDepth = (run('document.history').undo || []).length; } catch { S.undoDepth = ins.canUndo ? S.undoFloor + 1 : S.undoFloor; }
+  S.canUndo = !!ins.canUndo && S.undoDepth > S.undoFloor;
+  const sp = (ins.spreads || [])[S.page] || { items: [] };
+  S.allItems = sp.items || [];
+  S.items = S.allItems.filter(it => !it.hidden);
+  S.stories = new Map((ins.stories || []).map(s => [s.id, s]));
+  S.swatches = ins.swatches || [];
+  for (const n of S.swatches) if (!S.swatchNames.has(n)) S.swatchNames.set(n, n);
+  if (S.sel != null && !S.items.some(it => it.id === S.sel)) S.sel = null;
+}
+
+function renderPage() {
+  const scale = Math.min(6, Math.max(0.05, S.k * S.dpr));
+  let p;
+  try { p = S.d.renderPage(S.page, scale, true); }
+  catch (e) { console.error(e); toast('The preview could not be drawn.'); return; }
+  const c = S.pageCanvas;
+  c.width = p.width; c.height = p.height;
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(p.rgba), p.width, p.height), 0, 0);
+  p.free();
+}
+
+// Page points → canvas CSS pixels.
+const px = v => (v + S.spec.bleed) * S.k;
+const pt = v => v / S.k - S.spec.bleed;
+
+function itemRect(it) {
+  const [x0, y0, x1, y1] = it.bounds;
+  return { x: px(x0), y: px(y0), w: (x1 - x0) * S.k, h: (y1 - y0) * S.k };
+}
+
+function draw() {
+  const ctx = el.canvas.getContext('2d');
+  const cw = el.canvas.width / S.dpr, ch = el.canvas.height / S.dpr;
+  ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(S.pageCanvas, 0, 0, cw, ch);
+
+  const { w, h, safety } = S.spec;
+  // Wash the part that gets cut off, so it reads as "not on the card".
+  ctx.fillStyle = 'rgba(255,255,255,.45)';
+  ctx.beginPath();
+  ctx.rect(0, 0, cw, ch);
+  ctx.rect(px(0), px(0), w * S.k, h * S.k);
+  ctx.fill('evenodd');
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([2, 3]); ctx.strokeStyle = '#e04444'; ctx.strokeRect(1, 1, cw - 2, ch - 2);
+  ctx.setLineDash([]); ctx.strokeStyle = '#222'; ctx.strokeRect(px(0), px(0), w * S.k, h * S.k);
+  // The safe line on a white underlay, so it reads on any background colour (green on teal didn't).
+  const safeRect = [px(safety), px(safety), (w - 2 * safety) * S.k, (h - 2 * safety) * S.k];
+  ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.strokeRect(...safeRect);
+  ctx.lineWidth = 1.75; ctx.setLineDash([6, 4]); ctx.strokeStyle = '#13843f'; ctx.strokeRect(...safeRect);
+  ctx.setLineDash([]); ctx.lineWidth = 1.5;
+
+  for (const it of S.items) if (problemsOf(it).length) {
+    const r = itemRect(it);
+    ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+    ctx.strokeRect(r.x, r.y, r.w, r.h); ctx.setLineDash([]);
+  }
+
+  if (S.drag && S.drag.mode === 'draw' && S.drag.moved) {
+    const b = drawRect(S.drag);
+    ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    if (S.drag.tool === 'ellipse') {
+      ctx.beginPath(); ctx.ellipse(px((b[0] + b[2]) / 2), px((b[1] + b[3]) / 2), (b[2] - b[0]) * S.k / 2, (b[3] - b[1]) * S.k / 2, 0, 0, Math.PI * 2); ctx.stroke();
+    } else ctx.strokeRect(px(b[0]), px(b[1]), Math.max(1, (b[2] - b[0]) * S.k), Math.max(1, (b[3] - b[1]) * S.k));
+    ctx.setLineDash([]);
+  }
+  const sel = selected();
+  if (!sel) return;
+  let r = itemRect(sel);
+  const d = S.drag;
+  if (d && d.moved && d.mode !== 'draw') {
+    if (d.mode === 'move') {
+      // A ghost of the item where it will land; the real move happens on release.
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(S.pageCanvas, r.x * S.dpr, r.y * S.dpr, r.w * S.dpr, r.h * S.dpr, r.x + d.dx * S.k, r.y + d.dy * S.k, r.w, r.h);
+      ctx.globalAlpha = 1;
+      r = { ...r, x: r.x + d.dx * S.k, y: r.y + d.dy * S.k };
+      ctx.strokeStyle = '#d946ef'; ctx.lineWidth = 1;
+      if (d.snapX) { ctx.beginPath(); ctx.moveTo(px(w / 2), 0); ctx.lineTo(px(w / 2), ch); ctx.stroke(); }
+      if (d.snapY) { ctx.beginPath(); ctx.moveTo(0, px(h / 2)); ctx.lineTo(cw, px(h / 2)); ctx.stroke(); }
+    } else {
+      const b = d.to;
+      r = { x: px(b[0]), y: px(b[1]), w: (b[2] - b[0]) * S.k, h: (b[3] - b[1]) * S.k };
+    }
+  }
+  ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2;
+  ctx.strokeRect(r.x, r.y, r.w, r.h);
+  if (!isBackground(sel)) {
+    ctx.fillStyle = '#fff';
+    for (const [hx, hy] of corners(r)) {
+      ctx.beginPath(); ctx.arc(hx, hy, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+  }
+}
+
+function corners(r) {
+  return [[r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h]];
+}
+
+// ── what things are ──────────────────────────────────────────
+
+const selected = () => S.items.find(it => it.id === S.sel) || null;
+const isText = it => it && it.kind === '<text frame>';
+const isImage = it => it && it.kind === '<image>';
+const isShape = it => it && (it.kind === '<rectangle>' || it.kind === '<ellipse>' || it.kind === '<polygon>');
+
+function isBackground(it) {
+  if (!it || it.kind !== '<rectangle>') return false;
+  const b = S.spec.bleed, [x0, y0, x1, y1] = it.bounds;
+  const near = (a, c) => Math.abs(a - c) < 0.75;
+  return near(x0, -b) && near(y0, -b) && near(x1, S.spec.w + b) && near(y1, S.spec.h + b);
+}
+
+function background() { return S.items.find(isBackground) || null; }
+
+// Plain-language problems with one item, as the print check and the outlines see them.
+function problemsOf(it) {
+  const out = [];
+  const { w, h, bleed, safety } = S.spec;
+  const [x0, y0, x1, y1] = it.bounds;
+  if (isText(it)) {
+    if (x0 < safety - 0.5 || y0 < safety - 0.5 || x1 > w - safety + 0.5 || y1 > h - safety + 0.5)
+      out.push('Some words are outside the green dashed line and could be cut off.');
+    const st = S.stories.get(it.story);
+    if (st && st.overset) out.push('Some words don\'t fit in their box. Make the box bigger or the words smaller.');
+  } else if (!isBackground(it)) {
+    const short = past => past < -0.5 && past > -bleed + 0.5;
+    if (short(x0) || short(y0) || short(w - x1) || short(h - y1))
+      out.push('A photo or shape goes past the cut line but stops before the red dotted line, which can leave a thin white edge. Stretch it to the red line, or keep it inside.');
+  }
+  if (isImage(it) && S.imagePx.has(it.id)) {
+    const [pw, ph] = S.imagePx.get(it.id);
+    const s = Math.max((x1 - x0) / pw, (y1 - y0) / ph);   // points per pixel when the photo fills its box
+    const ppi = 72 / s;
+    if (ppi < LOW_PPI) out.push('This photo is small for its size and may print blurry (' + Math.round(ppi) + ' pixels per inch; 150 or more looks sharp). Use a larger photo or make it smaller.');
+  }
+  return out;
+}
+
+// ── chrome ───────────────────────────────────────────────────
+
+function updateChrome() {
+  el.undo.disabled = !S.canUndo;
+  el.redo.disabled = !S.canRedo;
+  [...el.sides.children].forEach((b, i) => b.setAttribute('aria-selected', String(i === S.page)));
+  const msgs = [...new Set(S.items.flatMap(problemsOf))];
+  el.warnings.textContent = '';
+  for (const m of msgs) { const d = document.createElement('div'); d.textContent = m; el.warnings.appendChild(d); }
+  el.emptyHint.hidden = S.items.length > 0 || S.mode === 'adv';
+  updateContextBar();
+  if (S.mode === 'adv' && S.spec) { updateControl(); updatePanels(); }
+}
+
+function updateContextBar() {
+  const it = selected();
+  el.ctxHint.hidden = !!it;
+  el.ctxText.hidden = !isText(it);
+  el.ctxColour.hidden = !(isText(it) || isShape(it));
+  el.ctxPhoto.hidden = !isImage(it);
+  el.ctxCommon.hidden = !it || isBackground(it);
+  if (!it) { closeColours(); closeTextEditor(); return; }
+  if (!isText(it)) closeTextEditor();
+  let colour;
+  if (isText(it)) {
+    const st = textStyle(it.id);
+    el.fontPick.value = st.font;
+    el.boldBtn.setAttribute('aria-pressed', String(st.bold));
+    el.sizeOut.textContent = String(st.size);
+    el.alignIcon.setAttribute('d', ALIGN_ICON[st.align] || ALIGN_ICON.center);
+    colour = st.colour;
+  } else {
+    colour = S.colour.get(it.id);
+  }
+  const c = COLOURS.find(x => x.name === colour);
+  el.colourDot.style.background = c ? c.css : 'conic-gradient(#e5252f, #ffe014, #39b54a, #0067b1, #6e3a96, #e5252f)';
+  [...el.swatches.children].forEach(b => b.setAttribute('aria-pressed', String(b.title === colour)));
+}
+
+function buildSwatches() {
+  for (const c of COLOURS) {
+    const mk = () => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.title = c.name; b.setAttribute('aria-label', c.name);
+      b.style.background = c.css;
+      return b;
+    };
+    const a = mk(); a.addEventListener('click', () => { applyColour(c); closeColours(); }); el.swatches.appendChild(a);
+    const g = mk(); g.addEventListener('click', () => setBackground(c)); el.bgSwatches.appendChild(g);
+  }
+}
+
+function textStyle(id) {
+  if (!S.style.has(id)) S.style.set(id, { font: 'clean', bold: false, size: 24, align: 'center', colour: 'Black' });
+  return S.style.get(id);
+}
+
+// ── the drawer (Text, Photos, Shapes, Background) ────────────
+
+function openDrawer(cat, { toggle = false } = {}) {
+  const small = matchMedia('(max-width: 860px)').matches;
+  if (small && toggle && S.cat === cat && el.drawer.classList.contains('open')) { closeDrawer(); return; }
+  S.cat = cat;
+  document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== cat; });
+  document.querySelectorAll('.railbtn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cat === cat)));
+  el.drawer.classList.add('open');
+}
+function closeDrawer() {
+  el.drawer.classList.remove('open');
+  if (matchMedia('(max-width: 860px)').matches) document.querySelectorAll('.railbtn').forEach(b => b.setAttribute('aria-pressed', 'false'));
+}
+// On a phone the drawer covers the design, so it closes once something is added.
+function afterAdd() { if (matchMedia('(max-width: 860px)').matches) closeDrawer(); }
+
+document.querySelectorAll('.railbtn').forEach(b => b.addEventListener('click', () => openDrawer(b.dataset.cat, { toggle: true })));
+
+// ── selecting, and the toolbar's actions ─────────────────────
+
+function select(id) {
+  S.sel = id;
+  draw();
+  updateChrome();
+}
+
+function swatchFor(c) {
+  if (c.swatch) return c.swatch;
+  const want = 'PPS ' + c.name;
+  if (S.swatchNames.has(want)) return S.swatchNames.get(want);
+  const [cc, m, y, k] = c.cmyk;
+  const r = run('swatch.create', { name: want, color: { c: cc, m, y, k } });
+  const name = (r && r.name) || want;
+  S.swatchNames.set(want, name);
+  return name;
+}
+
+const cmyk = c => ({ c: c.cmyk[0], m: c.cmyk[1], y: c.cmyk[2], k: c.cmyk[3] });
+
+function applyColour(c) {
+  const it = selected();
+  if (!it) return;
+  if (isText(it)) {
+    try {
+      run('selection.set', { ids: [it.id] });
+      run('type.char', { attrs: { fill: swatchFor(c) } });
+      textStyle(it.id).colour = c.name;
+    } catch (e) { console.error(e); toast('That colour could not be applied.'); return; }
+  } else {
+    if (tryRun('object.color', { color: cmyk(c), ids: [it.id] }, 'That colour could not be applied.') === undefined) return;
+    S.colour.set(it.id, c.name);
+  }
+  changed();
+}
+
+function applyTextStyle(patch) {
+  const it = selected();
+  if (!isText(it)) return;
+  const st = Object.assign(textStyle(it.id), patch);
+  const f = FONTS[st.font] || FONTS.clean;
+  try {
+    run('selection.set', { ids: [it.id] });
+    run('type.char', { attrs: { fontFamily: f.family, fontStyle: st.bold ? f.bold : f.regular, size: st.size } });
+    if ('align' in patch) run('type.para', { attrs: { align: st.align } });
+    fitText(it.id);
+  } catch (e) { console.error(e); toast('That style could not be applied.'); return; }
+  changed();
+}
+
+// Text boxes fit their words, as in Canva: after the words or their size change, the box shrinks
+// to its lines and then grows a line at a time until nothing is left over. (The engine stores an
+// auto-size setting but does not apply it while composing, so this does.)
+function fitText(id, page = S.page) {
+  const find = () => {
+    const ins = run('document.inspect');
+    const it = (((ins.spreads || [])[page] || {}).items || []).find(x => x.id === id);
+    const st = it && (ins.stories || []).find(x => x.id === it.story);
+    return it && st ? { it, st } : null;
+  };
+  // One line, from the type as the engine has it (a frame from IDML or the Control bar may
+  // differ from this page's own note of it).
+  let lineH = textStyle(id).size * 1.2;
+  try {
+    run('selection.set', { ids: [id] });
+    const ch = (run('type.selectionAttrs') || {}).chars || {};
+    if (ch.leading && ch.leading.kind === 'points' && ch.leading.value > 0) lineH = ch.leading.value;
+    else if (ch.size > 0) lineH = ch.size * 1.2;
+  } catch { /* keep the page's note */ }
+  let f = find();
+  if (!f) return;
+  const [x0, y0, x1, y1] = f.it.bounds;
+  const need = Math.max(1, f.st.lines || 0) * lineH + lineH * 0.35;
+  if (!f.st.overset && y1 - y0 - need > lineH * 0.5) {
+    run('transform.resize', { from: f.it.bounds, to: [x0, y0, x1, y0 + need], content: false, ids: [id] });
+    f = find();
+  }
+  for (let i = 0; f && f.st.overset && i < 40; i++) {
+    const b = f.it.bounds;
+    run('transform.resize', { from: b, to: [b[0], b[1], b[2], b[3] + lineH], content: false, ids: [id] });
+    f = find();
+  }
+}
+
+function nudgeSize(dir) {
+  const it = selected();
+  if (!isText(it)) return;
+  const s = textStyle(it.id).size;
+  const step = s < 20 ? 1 : s < 48 ? 2 : 4;
+  applyTextStyle({ size: Math.max(6, Math.min(200, s + dir * step)) });
+}
+
+el.fontPick.addEventListener('change', () => applyTextStyle({ font: el.fontPick.value }));
+el.boldBtn.addEventListener('click', () => applyTextStyle({ bold: el.boldBtn.getAttribute('aria-pressed') !== 'true' }));
+$('sizeDown').addEventListener('click', () => nudgeSize(-1));
+$('sizeUp').addEventListener('click', () => nudgeSize(1));
+$('alignBtn').addEventListener('click', () => {
+  const it = selected();
+  if (!isText(it)) return;
+  const cur = textStyle(it.id).align;
+  applyTextStyle({ align: ALIGNS[(ALIGNS.indexOf(cur) + 1) % ALIGNS.length] });
+});
+$('colourBtn').addEventListener('click', e => { e.stopPropagation(); el.colourPop.hidden ? openColours() : closeColours(); });
+function openColours() { el.colourPop.hidden = false; }
+function closeColours() { el.colourPop.hidden = true; }
+document.addEventListener('pointerdown', e => {
+  if (!el.colourPop.hidden && !el.colourPop.contains(e.target) && e.target !== $('colourBtn') && !$('colourBtn').contains(e.target)) closeColours();
+});
+
+// ── editing words, in a box right on the design ──────────────
+
+$('editText').addEventListener('click', openTextEditor);
+$('textDone').addEventListener('click', () => { commitText(); closeTextEditor(); });
+
+function openTextEditor() {
+  const it = selected();
+  if (!isText(it)) return;
+  const s = tryRun('story.get', { story: it.story });
+  el.textInput.value = s ? s.text || '' : '';
+  el.textEditor.hidden = false;
+  placeTextEditor();
+  el.textInput.focus();
+  el.textInput.select();
+}
+function closeTextEditor() { el.textEditor.hidden = true; }
+function placeTextEditor() {
+  if (el.textEditor.hidden) return;
+  const it = selected();
+  if (!isText(it)) { closeTextEditor(); return; }
+  const r = itemRect(it);
+  const c = el.canvas.getBoundingClientRect(), st = el.stage.getBoundingClientRect();
+  // The editor sits in the stage, which scrolls when Advanced zooms in.
+  const sl = el.stage.scrollLeft, stp = el.stage.scrollTop;
+  const left = Math.max(sl, Math.min(c.left - st.left + sl + r.x, sl + st.width - el.textEditor.offsetWidth));
+  let top = c.top - st.top + stp + r.y + r.h + 8;
+  if (top + el.textEditor.offsetHeight > stp + st.height) top = Math.max(stp, c.top - st.top + stp + r.y - el.textEditor.offsetHeight - 8);
+  el.textEditor.style.left = left + 'px';
+  el.textEditor.style.top = top + 'px';
+}
+
+let textTimer = 0;
+function commitText() {
+  clearTimeout(textTimer);
+  const it = selected();
+  if (!isText(it)) return;
+  const text = el.textInput.value.slice(0, 2000);
+  const cur = tryRun('story.get', { story: it.story });
+  if (cur && cur.text === text) return;
+  if (tryRun('story.setText', { story: it.story, text }) === undefined) return;
+  tryRun('selection.set', { ids: [it.id] });
+  try { fitText(it.id); } catch (e) { console.error(e); }
+  changed();
+}
+el.textInput.addEventListener('input', () => { clearTimeout(textTimer); textTimer = setTimeout(commitText, 250); });
+el.textInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { commitText(); closeTextEditor(); }
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { commitText(); closeTextEditor(); }
+});
+
+// ── layers, copies, delete, photos ───────────────────────────
+
+$('remove').addEventListener('click', removeSelected);
+$('toFront').addEventListener('click', () => arrange('front'));
+$('toBack').addEventListener('click', () => arrange('back'));
+$('duplicate').addEventListener('click', duplicate);
+$('fillSide').addEventListener('click', fillSide);
+$('replacePhoto').addEventListener('click', () => { S.replaceInto = S.sel; el.photoPick.click(); });
+
+function removeSelected() {
+  const it = selected();
+  if (!it || isBackground(it)) return;
+  if (tryRun('edit.clear', { ids: [it.id] }) === undefined) return;
+  S.sel = null;
+  changed();
+}
+
+function arrange(to) {
+  const it = selected();
+  if (!it) return;
+  if (tryRun('object.arrange', { to, ids: [it.id] }) === undefined) return;
+  const bg = background();
+  // Nothing goes behind the background colour.
+  if (to === 'back' && bg && bg.id !== it.id) tryRun('object.arrange', { to: 'back', ids: [bg.id] });
+  changed();
+}
+
+function duplicate() {
+  const it = selected();
+  if (!it || isBackground(it)) return;
+  const before = new Set(S.items.map(i => i.id));
+  try {
+    run('selection.set', { ids: [it.id] });
+    run('edit.duplicate', {});
+  } catch (e) { console.error(e); toast('That could not be copied.'); return; }
+  readDocument();
+  const copy = S.items.find(i => !before.has(i.id));
+  if (copy) {
+    // Offset the copy a little so it's visibly a second one.
+    tryRun('transform.move', { dx: 12, dy: 12, ids: [copy.id] });
+    if (S.style.has(it.id)) S.style.set(copy.id, { ...S.style.get(it.id) });
+    if (S.colour.has(it.id)) S.colour.set(copy.id, S.colour.get(it.id));
+    if (S.imagePx.has(it.id)) S.imagePx.set(copy.id, S.imagePx.get(it.id));
+    S.sel = copy.id;
+  }
+  changed();
+}
+
+function bleedBox() {
+  const b = S.spec.bleed;
+  return [-b, -b, S.spec.w + b, S.spec.h + b];
+}
+
+function fillSide() {
+  const it = selected();
+  if (!isImage(it)) return;
+  try {
+    run('transform.resize', { from: it.bounds, to: bleedBox(), content: false, ids: [it.id] });
+    run('object.fit', { mode: 'fillProportionally', ids: [it.id] });
+    const bg = background();
+    run('object.arrange', { to: 'back', ids: [it.id] });
+    if (bg) run('object.arrange', { to: 'back', ids: [bg.id] });
+  } catch (e) { console.error(e); toast('The photo could not be resized.'); return; }
+  changed();
+}
+
+// ── adding things ────────────────────────────────────────────
+
+function safeBox() {
+  const s = S.spec.safety;
+  return [s, s, S.spec.w - s, S.spec.h - s];
+}
+
+// Canva's three text sizes, scaled to the card.
+const TEXT_KINDS = {
+  heading: { text: 'Add a heading', size: m => m / 8, bold: true, at: 0.3 },
+  subheading: { text: 'Add a subheading', size: m => m / 15, bold: true, at: 0.52 },
+  body: { text: 'Add a little bit of body text', size: m => m / 26, bold: false, at: 0.72 },
+};
+
+document.querySelectorAll('[data-text]').forEach(b => b.addEventListener('click', () => addText(b.dataset.text)));
+document.querySelectorAll('[data-shape]').forEach(b => b.addEventListener('click', () => addShape(b.dataset.shape)));
+
+function addText(kind) {
+  if (!S.spec) return;
+  const t = TEXT_KINDS[kind] || TEXT_KINDS.body;
+  const [sx0, sy0, sx1, sy1] = safeBox();
+  const size = Math.max(8, Math.round(t.size(Math.min(S.spec.w, S.spec.h))));
+  const fw = (sx1 - sx0) * 0.85, fh = size * 2.4;
+  const cx = (sx0 + sx1) / 2;
+  const cy = Math.min(sy1 - fh / 2, Math.max(sy0 + fh / 2, sy0 + (sy1 - sy0) * t.at));
+  try {
+    const r = run('frame.create', { spread: S.page, rect: [cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2], content: 'text', text: t.text });
+    S.style.set(r.id, { font: 'clean', bold: t.bold, size, align: 'center', colour: 'Black' });
+    run('selection.set', { ids: [r.id] });
+    run('type.char', { attrs: { fontFamily: FONTS.clean.family, fontStyle: t.bold ? FONTS.clean.bold : FONTS.clean.regular, size, fill: '[Black]' } });
+    run('type.para', { attrs: { align: 'center' } });
+    fitText(r.id);
+    S.sel = r.id;
+    changed();
+    afterAdd();
+    openTextEditor();
+  } catch (e) { console.error(e); toast('That could not be added. Please try again.'); }
+}
+
+function addShape(kind) {
+  if (!S.spec) return;
+  const [sx0, sy0, sx1, sy1] = safeBox();
+  const cx = (sx0 + sx1) / 2, cy = (sy0 + sy1) / 2;
+  const side = Math.min(sx1 - sx0, sy1 - sy0) * 0.4;
+  let rect = [cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2];
+  const params = { spread: S.page, content: 'unassigned' };
+  if (kind === 'circle') params.shape = 'ellipse';
+  else if (kind === 'triangle') { params.shape = 'polygon'; params.sides = 3; }
+  else if (kind === 'line') { const lw = (sx1 - sx0) * 0.6, th = Math.max(1.5, side / 40); rect = [cx - lw / 2, cy - th / 2, cx + lw / 2, cy + th / 2]; }
+  else params.shape = 'rectangle';
+  const colour = COLOURS.find(x => x.name === (kind === 'line' ? 'Black' : 'Blue'));
+  try {
+    const r = run('frame.create', { ...params, rect });
+    run('object.color', { color: cmyk(colour), ids: [r.id] });
+    // New shapes come with a 1 pt black outline (a desktop-publishing default) that would print.
+    run('object.stroke', { swatch: '[None]', ids: [r.id] });
+    S.colour.set(r.id, colour.name);
+    S.sel = r.id;
+    changed();
+    afterAdd();
+  } catch (e) { console.error(e); toast('That could not be added. Please try again.'); }
+}
+
+function setBackground(c) {
+  if (!S.spec) return;
+  try {
+    let bg = background();
+    if (!bg) {
+      const r = run('frame.create', { spread: S.page, rect: bleedBox(), content: 'unassigned' });
+      run('object.stroke', { swatch: '[None]', ids: [r.id] });
+      run('object.arrange', { to: 'back', ids: [r.id] });
+      bg = { id: r.id };
+    }
+    run('object.color', { color: cmyk(c), ids: [bg.id] });
+    S.colour.set(bg.id, c.name);
+  } catch (e) { console.error(e); toast('The background could not be changed.'); return; }
+  changed();
+}
+
+$('noBackground').addEventListener('click', () => {
+  const bg = background();
+  if (!bg) return;
+  if (tryRun('edit.clear', { ids: [bg.id] }) !== undefined) { if (S.sel === bg.id) S.sel = null; changed(); }
+});
+
+// ── photos ───────────────────────────────────────────────────
+
+$('upload').addEventListener('click', () => { S.replaceInto = null; el.photoPick.click(); });
+
+el.photoPick.addEventListener('change', async () => {
+  const file = el.photoPick.files && el.photoPick.files[0];
+  el.photoPick.value = '';
+  if (!file) return;
+  let dims;
+  try {
+    const bmp = await createImageBitmap(file);
+    dims = [bmp.width, bmp.height];
+    bmp.close();
+  } catch { toast('That file isn\'t a photo this designer can use. Try a JPEG or PNG.'); return; }
+  const up = { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()), dims, url: URL.createObjectURL(file) };
+  S.uploads.push(up);
+  addUploadThumb(up);
+  placePhoto(up, S.replaceInto);
+});
+
+function addUploadThumb(up) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.setAttribute('aria-label', 'Add ' + up.name); b.dataset.tip = 'Add this photo again';
+  const img = document.createElement('img'); img.src = up.url; img.alt = '';
+  b.appendChild(img);
+  b.addEventListener('click', () => placePhoto(up, null));
+  el.uploads.prepend(b);
+}
+
+function placePhoto(up, into) {
+  try {
+    let id = into;
+    if (id == null || !S.items.some(it => it.id === id)) {
+      const [sx0, sy0, sx1, sy1] = safeBox();
+      const cx = (sx0 + sx1) / 2, cy = (sy0 + sy1) / 2;
+      const k = Math.min(((sx1 - sx0) * 0.6) / up.dims[0], ((sy1 - sy0) * 0.6) / up.dims[1]);
+      const fw = up.dims[0] * k, fh = up.dims[1] * k;
+      id = run('frame.create', { spread: S.page, rect: [cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2], content: 'graphic' }).id;
+    }
+    JSON.parse(S.d.placeImage(up.bytes, up.name, id));
+    run('object.fit', { mode: 'fillProportionally', ids: [id] });
+    S.imagePx.set(id, up.dims);
+    S.sel = id;
+    S.replaceInto = null;
+    changed();
+    afterAdd();
+  } catch (e) {
+    console.error(e);
+    toast('That photo could not be added. Try a smaller JPEG or PNG.');
+  }
+}
+
+// ── opening an InDesign (IDML) file ──────────────────────────
+
+$('openFile').addEventListener('click', () => el.filePick.click());
+el.filePick.addEventListener('change', async () => {
+  const file = el.filePick.files && el.filePick.files[0];
+  el.filePick.value = '';
+  if (!file) return;
+  if (S.dirty && !confirm('Opening this file replaces your current design. Continue?')) return;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let opened;
+  try {
+    opened = JSON.parse(S.d.openFile(bytes, file.name));
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (msg.includes(INDD_UNSUPPORTED)) {
+      toast('That\'s an InDesign .indd file, which only InDesign can open. In InDesign choose File › Save As › InDesign Markup (IDML), then open the .idml file here.', 12000);
+    } else {
+      console.error(e);
+      toast('That file couldn\'t be opened. It needs to be an IDML file saved from InDesign.', 8000);
+    }
+    return;
+  }
+  // The calculator owns the size: a file built for a different size or page count is refused,
+  // and the design that was open stays.
+  const ins = run('document.inspect');
+  const st = ins.settings || {};
+  const fits = (a, b) => Math.abs(a - b) < 2;
+  const sameSize = (fits(st.pageWidth, S.spec.w) && fits(st.pageHeight, S.spec.h));
+  if (!sameSize || ins.pageCount !== S.spec.pages) {
+    tryRun('file.close', { index: opened.index });
+    const inch = v => +(v / 72).toFixed(2);
+    toast('That file is ' + inch(st.pageWidth) + ' × ' + inch(st.pageHeight) + ' in with ' + ins.pageCount + ' page' + (ins.pageCount === 1 ? '' : 's') +
+      ', but this order is ' + inch(S.spec.w) + ' × ' + inch(S.spec.h) + ' in with ' + S.spec.pages + '. Change the order to match, or open a file made for this size.', 12000);
+    refresh();
+    return;
+  }
+  resetLocalState();
+  S.undoFloor = 0;
+  S.dirty = true;
+  afterAdd();
+  refresh();
+  toast('Opened ' + file.name + '. Photos linked in the file may need uploading again.', 6000);
+});
+
+// ── tapping and dragging on the design ───────────────────────
+
+function hit(x, y) {
+  const p = [pt(x), pt(y)];
+  for (let i = S.items.length - 1; i >= 0; i--) {
+    const it = S.items[i];
+    if (it.locked) continue;
+    const [x0, y0, x1, y1] = it.bounds;
+    const slop = it.bounds[3] - it.bounds[1] < 4 || it.bounds[2] - it.bounds[0] < 4 ? 4 / S.k : 0;   // lines are thin
+    if (p[0] >= x0 - slop && p[0] <= x1 + slop && p[1] >= y0 - slop && p[1] <= y1 + slop) return it;
+  }
+  return null;
+}
+
+function handleAt(x, y) {
+  const it = selected();
+  if (!it || isBackground(it) || it.locked) return -1;
+  const reach = 22;
+  return corners(itemRect(it)).findIndex(([hx, hy]) => Math.hypot(hx - x, hy - y) <= reach);
+}
+
+el.canvas.addEventListener('pointerdown', e => {
+  if (!S.spec) return;
+  closeColours();
+  const x = e.offsetX, y = e.offsetY;
+  if (S.mode === 'adv' && S.tool !== 'select') {
+    if (!el.textEditor.hidden) { commitText(); closeTextEditor(); }
+    S.drag = { mode: 'draw', tool: S.tool, x, y, p0: [pt(x), pt(y)], p1: [pt(x), pt(y)], moved: false, shift: e.shiftKey };
+    el.canvas.setPointerCapture(e.pointerId);
+    return;
+  }
+  const h = handleAt(x, y);
+  if (h >= 0) {
+    const it = selected();
+    S.drag = { mode: 'resize', corner: h, id: it.id, from: it.bounds.slice(), to: it.bounds.slice(), x, y, moved: false };
+  } else {
+    const it = hit(x, y);
+    if (!it) { if (!el.textEditor.hidden) commitText(); select(null); return; }
+    if (it.id !== S.sel) { if (!el.textEditor.hidden) commitText(); select(it.id); }
+    S.drag = isBackground(it) ? null : { mode: 'move', id: it.id, from: it.bounds.slice(), x, y, dx: 0, dy: 0, moved: false };
+  }
+  if (S.drag) el.canvas.setPointerCapture(e.pointerId);
+});
+
+el.canvas.addEventListener('pointermove', e => {
+  const d = S.drag;
+  if (!d) return;
+  const dxCss = e.offsetX - d.x, dyCss = e.offsetY - d.y;
+  if (!d.moved && Math.hypot(dxCss, dyCss) < 4) return;
+  d.moved = true;
+  if (d.mode === 'draw') {
+    d.p1 = [pt(e.offsetX), pt(e.offsetY)];
+    d.shift = e.shiftKey;
+    draw();
+    return;
+  }
+  if (d.mode === 'move') {
+    let dx = dxCss / S.k, dy = dyCss / S.k;
+    // Snap the item's centre to the middle of the card.
+    const [x0, y0, x1, y1] = d.from;
+    const snap = 6 / S.k;
+    const cx = (x0 + x1) / 2 + dx, cy = (y0 + y1) / 2 + dy;
+    d.snapX = Math.abs(cx - S.spec.w / 2) < snap; if (d.snapX) dx += S.spec.w / 2 - cx;
+    d.snapY = Math.abs(cy - S.spec.h / 2) < snap; if (d.snapY) dy += S.spec.h / 2 - cy;
+    d.dx = dx; d.dy = dy;
+  } else {
+    const [x0, y0, x1, y1] = d.from;
+    const nx = pt(e.offsetX), ny = pt(e.offsetY), min = 6;
+    const left = d.corner === 0 || d.corner === 2, top = d.corner === 0 || d.corner === 1;
+    d.to = [left ? Math.min(nx, x1 - min) : x0, top ? Math.min(ny, y1 - min) : y0,
+            left ? x1 : Math.max(nx, x0 + min), top ? y1 : Math.max(ny, y0 + min)];
+  }
+  draw();
+});
+
+let lastTap = { id: null, t: 0 };
+function endDrag() {
+  const d = S.drag;
+  S.drag = null;
+  if (!d) return;
+  if (d.mode === 'draw') { createDrawn(d); return; }
+  if (!d.moved) {
+    draw();
+    // A second tap on selected text (or a double-click) opens its words for editing.
+    const now = performance.now();
+    if (isText(selected()) && lastTap.id === d.id && now - lastTap.t < 600) openTextEditor();
+    lastTap = { id: d.id, t: now };
+    return;
+  }
+  try {
+    if (d.mode === 'move') {
+      if (Math.abs(d.dx) < 0.25 && Math.abs(d.dy) < 0.25) { draw(); return; }
+      run('transform.move', { dx: d.dx, dy: d.dy, ids: [d.id] });
+    } else {
+      run('transform.resize', { from: d.from, to: d.to, content: false, ids: [d.id] });
+      const it = S.items.find(i => i.id === d.id);
+      if (isImage(it)) run('object.fit', { mode: 'fillProportionally', ids: [d.id] });
+    }
+  } catch (e) { console.error(e); toast('That change could not be made.'); draw(); return; }
+  changed();
+}
+el.canvas.addEventListener('pointerup', endDrag);
+el.canvas.addEventListener('pointercancel', () => { S.drag = null; draw(); });
+el.canvas.addEventListener('dblclick', () => { if (isText(selected())) openTextEditor(); });
+
+// ── undo, keys, print, back ──────────────────────────────────
+
+el.undo.addEventListener('click', undo);
+el.redo.addEventListener('click', redo);
+function undo() {
+  closeTextEditor();
+  // A size or sides change came from the order (Order options): undo stops there, so the design
+  // can never drift from the size the calculator is pricing.
+  if (S.undoDepth <= S.undoFloor) {
+    if (S.undoFloor > 0) toast('To change the size or sides, use Order options.');
+    return;
+  }
+  if (tryRun('edit.undo', {}) !== undefined) { S.dirty = true; S.canRedo = true; refresh(); }
+}
+function redo() {
+  closeTextEditor();
+  try { run('edit.redo', {}); } catch { S.canRedo = false; updateChrome(); return; }
+  S.dirty = true; refresh();
+}
+
+document.addEventListener('keydown', e => {
+  const typing = /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (typing) return;
+  if (S.mode === 'adv') {
+    if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); setZoom(S.zoom * 1.25); return; }
+    if (mod && e.key === '-') { e.preventDefault(); setZoom(S.zoom / 1.25); return; }
+    if (mod && e.key === '0') { e.preventDefault(); setZoom(1); return; }
+    if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); S.replaceInto = null; el.photoPick.click(); return; }
+    const t = !mod && !e.altKey && TOOL_KEYS[e.key.toLowerCase()];
+    if (t) { e.preventDefault(); setTool(t); return; }
+  }
+  if (e.key === 'Escape') { closeColours(); if (S.mode === 'adv' && S.tool !== 'select') setTool('select'); select(null); return; }
+  if (!S.sel) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeSelected(); return; }
+  if (e.key === 'Enter' && isText(selected())) { e.preventDefault(); openTextEditor(); return; }
+  const step = e.shiftKey ? 9 : 1;
+  const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+  const it = selected();
+  if (mv && it && !isBackground(it) && !it.locked) {
+    e.preventDefault();
+    if (tryRun('transform.move', { dx: mv[0], dy: mv[1], ids: [it.id] }) !== undefined) changed();
+  }
+});
+
+el.print.addEventListener('click', () => { commitText(); closeTextEditor(); openChecks(); });
+$('sheetCancel').addEventListener('click', () => { el.sheet.hidden = true; });
+$('sheetGo').addEventListener('click', doPrint);
+
+function allPages() {
+  const ins = run('document.inspect');
+  return (ins.spreads || []).map(sp => (sp.items || []).filter(it => !it.hidden));
+}
+
+function openChecks() {
+  const pages = allPages();
+  const keep = S.page;
+  const lines = [];
+  pages.forEach((items, i) => {
+    S.page = i; S.items = items;
+    const probs = [...new Set(items.flatMap(problemsOf))];
+    if (!items.length) lines.push(['warn', sideName(i) + ' is blank. That\'s fine if you meant it to be.']);
+    else if (probs.length) probs.forEach(p => lines.push(['warn', sideName(i) + ': ' + p]));
+    else lines.push(['ok', sideName(i) + ' looks ready.']);
+  });
+  S.page = keep;
+  readDocument();
+  el.checks.textContent = '';
+  for (const [cls, text] of lines) { const li = document.createElement('li'); li.className = cls; li.textContent = text; el.checks.appendChild(li); }
+  el.sheet.hidden = false;
+  $('sheetGo').focus();
+}
+
+function thumbs() {
+  const out = [];
+  for (let i = 0; i < S.spec.pages; i++) {
+    const scale = Math.min(1, 300 / (S.spec.w + 2 * S.spec.bleed));
+    const p = S.d.renderPage(i, scale, true);
+    const c = document.createElement('canvas');
+    c.width = p.width; c.height = p.height;
+    c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(p.rgba), p.width, p.height), 0, 0);
+    p.free();
+    out.push(c.toDataURL('image/jpeg', 0.8));
+  }
+  return out;
+}
+
+function doPrint() {
+  const go = $('sheetGo');
+  go.disabled = true; go.textContent = 'Preparing your print file…';
+  setTimeout(() => {
+    try {
+      const pdf = S.d.exportPdf(JSON.stringify({ bleed: true, standard: 'x4' }));
+      const design = S.d.saveDesign();
+      const anyPhoto = allPages().flat().some(isImage);
+      const manifest = {
+        pages: S.spec.pages, trimPt: [S.spec.w, S.spec.h], bleedPt: S.spec.bleed,
+        outputIntent: OUTPUT_INTENT, outputIntentPlaceholder: true, rgbImages: anyPhoto,
+      };
+      if (S.embedded) {
+        const buf = pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength);
+        post('pps-design:print', { pdf: buf, design, thumbs: thumbs(), manifest }, [buf]);
+        S.dirty = false;
+      } else {
+        const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = (el.productName.textContent || 'design').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-print.pdf';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        S.dirty = false;
+        toast('Your print file has downloaded. In a real order it would go to the proof next.');
+      }
+      el.sheet.hidden = true;
+    } catch (e) {
+      console.error(e);
+      toast('The print file could not be made. Please try again.');
+    } finally {
+      go.disabled = false; go.textContent = 'Looks good, continue';
+    }
+  }, 30);
+}
+
+el.back.addEventListener('click', () => {
+  if (S.embedded) {
+    let design = null;
+    try { design = S.d && S.spec ? S.d.saveDesign() : null; } catch (e) { console.error(e); }
+    post('pps-design:close', { design });
+  } else if (!S.dirty || confirm('Leave the designer? Your design isn\'t saved.')) {
+    history.length > 1 ? history.back() : (location.href = '../');
+  }
+});
+window.addEventListener('beforeunload', e => { if (!S.embedded && S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// ── Advanced Mode: InDesign's print workspace, over the same document ──
+
+function setMode(mode) {
+  if (mode === 'adv' && matchMedia('(max-width: 860px)').matches) mode = 'simple';
+  S.mode = mode;
+  el.app.classList.toggle('adv', mode === 'adv');
+  el.modeSimple.setAttribute('aria-pressed', String(mode === 'simple'));
+  el.modeAdv.setAttribute('aria-pressed', String(mode === 'adv'));
+  try { localStorage.setItem(MODE_KEY, mode); } catch { /* a private window keeps no setting */ }
+  if (mode !== 'adv') { setTool('select'); S.zoom = 1; }
+  closeColours();
+  if (mode === 'adv') { S.pageThumbsKey = ''; }
+  // The stage changes size with the panels: lay out once the grid has settled.
+  requestAnimationFrame(() => { if (S.spec) { layout(); updateChrome(); } });
+}
+el.modeSimple.addEventListener('click', () => setMode('simple'));
+el.modeAdv.addEventListener('click', () => setMode('adv'));
+
+function setTool(t) {
+  S.tool = t;
+  document.querySelectorAll('.tool[data-tool]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tool === t)));
+  el.canvas.style.cursor = t === 'select' ? '' : t === 'text' ? 'text' : 'crosshair';
+}
+document.querySelectorAll('.tool[data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+$('toolPlace').addEventListener('click', () => { S.replaceInto = null; el.photoPick.click(); });
+$('toolOpen').addEventListener('click', () => el.filePick.click());
+
+function setZoom(z) {
+  S.zoom = Math.min(8, Math.max(0.25, z));
+  layout();
+}
+$('zoomIn').addEventListener('click', () => setZoom(S.zoom * 1.25));
+$('zoomOut').addEventListener('click', () => setZoom(S.zoom / 1.25));
+$('zoomFit').addEventListener('click', () => setZoom(1));
+el.stage.addEventListener('wheel', e => {
+  if (S.mode !== 'adv' || !(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  setZoom(S.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+}, { passive: false });
+
+// Drawing with a tool: the rectangle being dragged, in page points.
+function drawRect(d) {
+  let [x0, y0] = d.p0, [x1, y1] = d.p1;
+  if (d.tool === 'line') {
+    if (Math.abs(x1 - x0) >= Math.abs(y1 - y0)) y1 = y0; else x1 = x0;
+  } else if (d.shift) {
+    const s = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+    x1 = x0 + Math.sign(x1 - x0 || 1) * s; y1 = y0 + Math.sign(y1 - y0 || 1) * s;
+  }
+  return [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
+}
+
+function createDrawn(d) {
+  let b = drawRect(d);
+  if (!d.moved || (b[2] - b[0] < 3 && b[3] - b[1] < 3)) {
+    // A click without a drag makes one at a standard size, as InDesign's dialog would.
+    const [x, y] = d.p0;
+    const [w, h] = { text: [216, 36], line: [144, 0], image: [144, 108] }[d.tool] || [72, 72];
+    b = [x, y, x + w, y + h];
+  }
+  try {
+    let id;
+    if (d.tool === 'text') {
+      id = run('frame.create', { spread: S.page, rect: b, content: 'text', text: '' }).id;
+      S.style.set(id, { font: 'clean', bold: false, size: 12, align: 'left', colour: 'Black' });
+      run('selection.set', { ids: [id] });
+      run('type.char', { attrs: { fontFamily: FONTS.clean.family, fontStyle: 'Regular', size: 12, fill: '[Black]' } });
+    } else if (d.tool === 'image') {
+      id = run('frame.create', { spread: S.page, rect: b, content: 'graphic' }).id;
+    } else {
+      // InDesign's defaults for a drawn shape: no fill, a 1 pt black stroke.
+      id = run('frame.create', { spread: S.page, rect: b, shape: d.tool === 'ellipse' ? 'ellipse' : 'rectangle', content: 'unassigned' }).id;
+      run('object.fill', { swatch: '[None]', ids: [id] });
+      run('object.stroke', { swatch: '[Black]', weight: 1, ids: [id] });
+    }
+    S.sel = id;
+    changed();
+    if (d.tool === 'text') openTextEditor();
+    if (d.tool === 'image') { S.replaceInto = id; el.photoPick.click(); }
+  } catch (e) { console.error(e); toast('That could not be drawn. Please try again.'); draw(); }
+}
+
+// ── the Control bar ──
+
+const inch = v => +(v / 72).toFixed(3);
+const num = input => { const v = parseFloat(input.value); return Number.isFinite(v) ? v : null; };
+function setIfIdle(input, v) { if (document.activeElement !== input) input.value = v; }
+
+// A swatch's colour for its chip: the known ones, and CMYK read from a "C=… M=… Y=… K=…" name.
+function swatchCss(name) {
+  if (!name || name === '[None]') return null;
+  if (name === '[Paper]') return '#ffffff';
+  if (name === '[Black]' || name === '[Registration]') return '#231f20';
+  const known = COLOURS.find(c => 'PPS ' + c.name === name || c.swatch === name);
+  if (known) return known.css;
+  const m = /C=([\d.]+)\s+M=([\d.]+)\s+Y=([\d.]+)\s+K=([\d.]+)/.exec(name);
+  if (m) {
+    const [c, mm, y, k] = m.slice(1).map(v => Math.min(100, +v) / 100);
+    const ch = v => Math.round(255 * (1 - v) * (1 - k));
+    return 'rgb(' + ch(c) + ',' + ch(mm) + ',' + ch(y) + ')';
+  }
+  return '#b9bcc2';
+}
+function paintChip(chip, name) {
+  const css = swatchCss(name);
+  chip.classList.toggle('none', !css);
+  if (chip.classList.contains('stroke')) { chip.style.borderColor = css || '#999'; chip.style.background = ''; }
+  else chip.style.background = css || '';
+}
+
+function swatchSelect(sel, current) {
+  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]')];
+  if (current && !names.includes(current)) names.push(current);
+  const key = names.join('|');
+  if (sel.dataset.key !== key) {
+    sel.textContent = '';
+    for (const n of names) { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); }
+    sel.dataset.key = key;
+  }
+  if (document.activeElement !== sel) sel.value = current || '[None]';
+}
+
+for (const f of Object.keys(FAMILIES)) { const o = document.createElement('option'); o.value = o.textContent = f; el.ctlFont.appendChild(o); }
+function styleOptions(family, current) {
+  const styles = FAMILIES[family] || [current || 'Regular'];
+  el.ctlStyle.textContent = '';
+  for (const st of styles) { const o = document.createElement('option'); o.value = o.textContent = st; el.ctlStyle.appendChild(o); }
+  if (current && !styles.includes(current)) { const o = document.createElement('option'); o.value = o.textContent = current; el.ctlStyle.appendChild(o); }
+  el.ctlStyle.value = current || styles[0];
+}
+
+// The text's own attributes, as the engine resolves them (not what this page last set).
+function textAttrs(it) {
+  try { run('selection.set', { ids: [it.id] }); return run('type.selectionAttrs') || {}; }
+  catch (e) { console.error(e); return {}; }
+}
+
+function updateControl() {
+  const it = selected();
+  el.ctlObj.hidden = !it;
+  el.ctlText.hidden = !isText(it);
+  el.ctlNone.hidden = !!it;
+  if (!it) {
+    el.ctlNone.textContent = 'Page ' + inch(S.spec.w) + ' × ' + inch(S.spec.h) + ' in · bleed ' + inch(S.spec.bleed) +
+      ' in · keep words ' + inch(S.spec.safety) + ' in inside the cut · ' + (S.items.length ? 'click something to change it' : 'draw with a tool on the left');
+    return;
+  }
+  const [x0, y0, x1, y1] = it.bounds;
+  setIfIdle(el.ctlX, inch(x0)); setIfIdle(el.ctlY, inch(y0));
+  setIfIdle(el.ctlW, inch(x1 - x0)); setIfIdle(el.ctlH, inch(y1 - y0));
+  let rot = 0;
+  try { rot = (run('transform.info', { ids: [it.id] }) || {}).rotation || 0; } catch { /* a group has none of its own */ }
+  setIfIdle(el.ctlRot, +rot.toFixed(2));
+  const attrs = isText(it) ? textAttrs(it) : null;
+  const ch = (attrs && attrs.chars) || {};
+  // A text frame's Fill is its words' colour (what people mean); its Stroke is the frame's edge.
+  const fill = isText(it) ? (ch.fill || '[Black]') : it.fill;
+  swatchSelect(el.ctlFill, fill); paintChip(el.ctlFillChip, fill);
+  el.ctlFill.closest('.ctl').dataset.tip = isText(it) ? 'Text colour' : 'Fill swatch';
+  swatchSelect(el.ctlStroke, it.stroke && it.stroke.swatch); paintChip(el.ctlStrokeChip, it.stroke && it.stroke.swatch);
+  setIfIdle(el.ctlWeight, it.stroke ? +(+it.stroke.weight || 0).toFixed(2) : 0);
+  setIfIdle(el.ctlOpacity, S.opacity.has(it.id) ? S.opacity.get(it.id) : 100);
+  for (const inp of [el.ctlX, el.ctlY, el.ctlW, el.ctlH, el.ctlRot]) inp.disabled = !!it.locked || isBackground(it);
+  if (attrs) {
+    if (document.activeElement !== el.ctlFont) el.ctlFont.value = ch.fontFamily in FAMILIES ? ch.fontFamily : '';
+    if (document.activeElement !== el.ctlStyle) styleOptions(ch.fontFamily, ch.fontStyle);
+    setIfIdle(el.ctlSize, ch.size != null ? +(+ch.size).toFixed(2) : '');
+    setIfIdle(el.ctlLeading, ch.leading && ch.leading.kind === 'points' ? +(+ch.leading.value).toFixed(2) : '');
+    setIfIdle(el.ctlTracking, ch.tracking != null ? Math.round(ch.tracking) : 0);
+    const al = (attrs.para || {}).align;
+    document.querySelectorAll('[data-palign]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.palign === al)));
+  }
+}
+
+function commitGeometry() {
+  const it = selected();
+  if (!it || it.locked || isBackground(it)) return;
+  const [x0, y0, x1, y1] = it.bounds;
+  const x = num(el.ctlX), y = num(el.ctlY), w = num(el.ctlW), h = num(el.ctlH);
+  if (x == null || y == null || w == null || h == null || w < 0 || h < 0) { updateControl(); return; }
+  const thin = (a, b) => b - a < 1;   // a drawn line has no height (or width) of its own
+  const to = [x * 72, y * 72, x * 72 + (thin(x0, x1) && w < 0.02 ? x1 - x0 : Math.max(0.5, w * 72)),
+              y * 72 + (thin(y0, y1) && h < 0.02 ? y1 - y0 : Math.max(0.5, h * 72))];
+  if (to.every((v, i) => Math.abs(v - it.bounds[i]) < 0.01)) return;
+  try {
+    run('transform.resize', { from: it.bounds, to, content: false, ids: [it.id] });
+    if (isImage(it)) run('object.fit', { mode: 'fillProportionally', ids: [it.id] });
+  } catch (e) { console.error(e); toast('That size could not be set.'); updateControl(); return; }
+  changed();
+}
+for (const inp of [el.ctlX, el.ctlY, el.ctlW, el.ctlH]) inp.addEventListener('change', commitGeometry);
+
+el.ctlRot.addEventListener('change', () => {
+  const it = selected(), a = num(el.ctlRot);
+  if (!it || a == null || it.locked) return;
+  if (tryRun('transform.set', { rotation: ((a % 360) + 360) % 360, ids: [it.id] }, 'That angle could not be set.') !== undefined) changed();
+});
+
+el.ctlFill.addEventListener('change', () => applySwatch(el.ctlFill.value, 'fill'));
+el.ctlStroke.addEventListener('change', () => applySwatch(el.ctlStroke.value, 'stroke'));
+
+function applySwatch(name, target) {
+  const it = selected();
+  if (!it) { toast('Select something first, then pick a swatch.'); return; }
+  try {
+    if (target === 'fill' && isText(it)) {
+      run('selection.set', { ids: [it.id] });
+      run('type.char', { attrs: { fill: name } });
+    } else if (target === 'fill') {
+      run('object.fill', { swatch: name, ids: [it.id] });
+    } else {
+      const p = { swatch: name, ids: [it.id] };
+      if (name !== '[None]' && !(it.stroke && it.stroke.weight > 0)) p.weight = 1;
+      run('object.stroke', p);
+    }
+  } catch (e) { console.error(e); toast('That swatch could not be applied.'); return; }
+  changed();
+}
+
+el.ctlWeight.addEventListener('change', () => {
+  const it = selected(), w = num(el.ctlWeight);
+  if (!it || w == null || w < 0) return;
+  const p = { weight: Math.min(w, 1000), ids: [it.id] };
+  if (w > 0 && (!it.stroke || it.stroke.swatch === '[None]')) p.swatch = '[Black]';
+  if (tryRun('object.stroke', p, 'That stroke could not be set.') !== undefined) changed();
+});
+
+el.ctlOpacity.addEventListener('change', () => {
+  const it = selected(), v = num(el.ctlOpacity);
+  if (!it || v == null) return;
+  const pc = Math.min(100, Math.max(0, v));
+  if (tryRun('object.opacity', { opacity: pc / 100, ids: [it.id] }, 'That opacity could not be set.') === undefined) return;
+  S.opacity.set(it.id, pc);
+  changed();
+});
+
+function applyChar(attrs) {
+  const it = selected();
+  if (!isText(it)) return;
+  try {
+    run('selection.set', { ids: [it.id] });
+    run('type.char', { attrs });
+  } catch (e) { console.error(e); toast('That type setting could not be applied.'); return; }
+  // Keep Simple mode's idea of the frame in step, for its toolbar.
+  const st = textStyle(it.id);
+  if (attrs.size) st.size = attrs.size;
+  if (attrs.fontFamily) {
+    const key = Object.keys(FONTS).find(k => FONTS[k].family === attrs.fontFamily);
+    if (key) st.font = key;
+  }
+  // The frame follows its words, as in Simple: bigger type must not push words out of print.
+  if (attrs.size || attrs.leading || attrs.fontFamily || attrs.fontStyle) {
+    if (attrs.size) st.size = attrs.size;
+    try { fitText(it.id); } catch (e) { console.error(e); }
+  }
+  changed();
+}
+el.ctlFont.addEventListener('change', () => {
+  const fam = el.ctlFont.value, styles = FAMILIES[fam] || ['Regular'];
+  const cur = el.ctlStyle.value;
+  applyChar({ fontFamily: fam, fontStyle: styles.includes(cur) ? cur : styles[0] });
+});
+el.ctlStyle.addEventListener('change', () => applyChar({ fontStyle: el.ctlStyle.value }));
+el.ctlSize.addEventListener('change', () => { const v = num(el.ctlSize); if (v != null && v >= 1 && v <= 1296) applyChar({ size: v }); });
+el.ctlLeading.addEventListener('change', () => {
+  const v = num(el.ctlLeading);
+  applyChar({ leading: v == null || v <= 0 ? { kind: 'auto' } : { kind: 'points', value: Math.min(v, 5000) } });
+});
+el.ctlTracking.addEventListener('change', () => { const v = num(el.ctlTracking); if (v != null) applyChar({ tracking: Math.max(-1000, Math.min(10000, v)) }); });
+document.querySelectorAll('[data-palign]').forEach(b => b.addEventListener('click', () => {
+  const it = selected();
+  if (!isText(it)) return;
+  try { run('selection.set', { ids: [it.id] }); run('type.para', { attrs: { align: b.dataset.palign } }); }
+  catch (e) { console.error(e); toast('That alignment could not be applied.'); return; }
+  if (b.dataset.palign in ALIGN_ICON) textStyle(it.id).align = b.dataset.palign;
+  changed();
+}));
+$('ctlEdit').addEventListener('click', openTextEditor);
+
+// ── the panels: Pages, Layers, Swatches, Align ──
+
+function updatePanels() {
+  updatePagesPanel();
+  updateLayersPanel();
+  updateSwatchPanel();
+}
+
+let thumbTimer = 0;
+function updatePagesPanel() {
+  const n = S.spec.pages;
+  if (el.pagesList.children.length !== n) {
+    el.pagesList.textContent = '';
+    for (let i = 0; i < n; i++) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      const img = document.createElement('img'); img.alt = '';
+      const cap = document.createElement('span'); cap.textContent = sideName(i);
+      b.append(img, cap);
+      b.addEventListener('click', () => { S.page = i; select(null); refresh(); });
+      el.pagesList.appendChild(b);
+    }
+  }
+  [...el.pagesList.children].forEach((b, i) => b.setAttribute('aria-current', String(i === S.page)));
+  // Thumbnails follow the design, a moment after it stops changing.
+  clearTimeout(thumbTimer);
+  thumbTimer = setTimeout(() => {
+    if (S.mode !== 'adv') return;
+    [...el.pagesList.children].forEach((b, i) => {
+      try {
+        const scale = Math.min(1, 104 / (S.spec.w + 2 * S.spec.bleed) * 2);
+        const p = S.d.renderPage(i, scale, true);
+        const c = document.createElement('canvas');
+        c.width = p.width; c.height = p.height;
+        c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(p.rgba), p.width, p.height), 0, 0);
+        p.free();
+        b.querySelector('img').src = c.toDataURL('image/png');
+      } catch (e) { console.error(e); }
+    });
+  }, 400);
+}
+
+function itemName(it) {
+  if (it.name) return it.name;
+  if (isBackground(it)) return 'Background';
+  if (isText(it)) { const st = S.stories.get(it.story); const t = st && st.preview ? st.preview.replace(/\s+/g, ' ').trim() : ''; return t ? '“' + t.slice(0, 40) + '”' : 'Empty text frame'; }
+  if (isImage(it)) return 'Photo';
+  const b = it.bounds;
+  if (b[3] - b[1] < 1 || b[2] - b[0] < 1) return 'Line';
+  return { '<rectangle>': 'Rectangle', '<ellipse>': 'Ellipse', '<polygon>': 'Polygon', '<group>': 'Group' }[it.kind] || it.kind.replace(/[<>]/g, '');
+}
+
+function updateLayersPanel() {
+  el.layersList.textContent = '';
+  const items = [...S.allItems].reverse();   // top of the stack first, as InDesign lists them
+  if (!items.length) { const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'Nothing on this side yet.'; el.layersList.appendChild(li); }
+  for (const it of items) {
+    const li = document.createElement('li');
+    li.setAttribute('aria-selected', String(it.id === S.sel));
+    li.classList.toggle('is-hidden', !!it.hidden);
+    const eye = document.createElement('button');
+    eye.type = 'button'; eye.className = 'lflag'; eye.textContent = it.hidden ? '◌' : '◉';
+    eye.setAttribute('aria-pressed', String(!it.hidden)); eye.setAttribute('aria-label', (it.hidden ? 'Show ' : 'Hide ') + itemName(it));
+    eye.title = it.hidden ? 'Hidden: it will not print. Click to show.' : 'Shown. Click to hide (hidden things do not print).';
+    eye.addEventListener('click', () => setFlag(it, { hidden: !it.hidden }));
+    const lock = document.createElement('button');
+    lock.type = 'button'; lock.className = 'lflag'; lock.textContent = it.locked ? '🔒' : '🔓';
+    lock.setAttribute('aria-pressed', String(!!it.locked)); lock.setAttribute('aria-label', (it.locked ? 'Unlock ' : 'Lock ') + itemName(it));
+    lock.title = it.locked ? 'Locked: it cannot be moved. Click to unlock.' : 'Click to lock it in place.';
+    lock.addEventListener('click', () => setFlag(it, { locked: !it.locked }));
+    const name = document.createElement('button');
+    name.type = 'button'; name.className = 'lname'; name.textContent = itemName(it);
+    name.addEventListener('click', () => { if (!it.hidden) select(it.id); });
+    li.append(eye, lock, name);
+    el.layersList.appendChild(li);
+  }
+}
+
+function setFlag(it, flags) {
+  if (tryRun('object.setFlags', { ids: [it.id], ...flags }, 'That could not be changed.') === undefined) return;
+  if (flags.hidden && S.sel === it.id) S.sel = null;
+  changed();
+}
+$('layerUp').addEventListener('click', () => { const it = selected(); if (it && tryRun('object.arrange', { to: 'forward', ids: [it.id] }) !== undefined) changed(); });
+$('layerDown').addEventListener('click', () => {
+  const it = selected();
+  if (!it || isBackground(it)) return;
+  const bg = background();
+  const order = S.items.map(i => i.id);
+  // Nothing goes behind the background colour.
+  if (bg && order.indexOf(it.id) === order.indexOf(bg.id) + 1) return;
+  if (tryRun('object.arrange', { to: 'backward', ids: [it.id] }) !== undefined) changed();
+});
+
+function updateSwatchPanel() {
+  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]')];
+  const key = names.join('|');
+  if (el.swatchList.dataset.key === key) return;
+  el.swatchList.dataset.key = key;
+  el.swatchList.textContent = '';
+  for (const n of names) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    const chip = document.createElement('span'); chip.className = 'sw-chip';
+    const css = swatchCss(n);
+    if (css) chip.style.background = css; else chip.classList.add('none');
+    const label = document.createElement('span'); label.textContent = n;
+    b.append(chip, label);
+    b.addEventListener('click', () => applySwatch(n, S.fsTarget));
+    li.appendChild(b);
+    el.swatchList.appendChild(li);
+  }
+}
+function setFsTarget(t) {
+  S.fsTarget = t;
+  el.fsFill.setAttribute('aria-pressed', String(t === 'fill'));
+  el.fsStroke.setAttribute('aria-pressed', String(t === 'stroke'));
+}
+el.fsFill.addEventListener('click', () => setFsTarget('fill'));
+el.fsStroke.addEventListener('click', () => setFsTarget('stroke'));
+el.swatchNew.addEventListener('submit', e => {
+  e.preventDefault();
+  const f = new FormData(el.swatchNew);
+  const v = k => Math.min(100, Math.max(0, Math.round(Number(f.get(k)) || 0)));
+  const c = { c: v('c'), m: v('m'), y: v('y'), k: v('k') };
+  const r = tryRun('swatch.create', { name: 'C=' + c.c + ' M=' + c.m + ' Y=' + c.y + ' K=' + c.k, color: c }, 'That swatch could not be made.');
+  if (r === undefined) return;
+  readDocument();
+  if (selected() && r && r.name) applySwatch(r.name, S.fsTarget); else changed();
+});
+
+document.querySelectorAll('[data-oalign]').forEach(b => b.addEventListener('click', () => {
+  const it = selected();
+  if (!it || it.locked || isBackground(it)) { if (!it) toast('Select something first, then align it.'); return; }
+  const { w, h, bleed, safety } = S.spec;
+  const box = { trim: [0, 0, w, h], safe: [safety, safety, w - safety, h - safety], bleed: [-bleed, -bleed, w + bleed, h + bleed] }[el.alignTo.value];
+  const [x0, y0, x1, y1] = it.bounds;
+  const dx = { left: box[0] - x0, right: box[2] - x1, hcenter: (box[0] + box[2]) / 2 - (x0 + x1) / 2 }[b.dataset.oalign] || 0;
+  const dy = { top: box[1] - y0, bottom: box[3] - y1, vcenter: (box[1] + box[3]) / 2 - (y0 + y1) / 2 }[b.dataset.oalign] || 0;
+  if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return;
+  if (tryRun('transform.move', { dx, dy, ids: [it.id] }, 'That could not be aligned.') !== undefined) changed();
+}));
+
+// ── Order options: the calculator's choices that change the design ──
+//
+// The calculator sends what may change (size, sides, quantity…) as a list of fields and owns
+// what they mean: this page draws them, sends a change back as pps-design:option, and shows the
+// price the calculator answers with. A new size or sides comes back as pps-design:spec, and the
+// design follows it (resizeDocument). Nothing here prices anything.
+
+function sanitizeOptions(list) {
+  const str = (v, n) => (typeof v === 'string' ? v : v == null ? '' : String(v)).slice(0, n);
+  const fin = v => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  return (Array.isArray(list) ? list : []).slice(0, 12).filter(o => o && typeof o === 'object' && /^[\w-]{1,32}$/.test(o.key || '')).map(o => {
+    const type = o.type === 'number' ? 'number' : 'select';
+    const out = { key: o.key, label: str(o.label || o.key, 40), type, help: str(o.help, 160) };
+    if (type === 'select') {
+      out.choices = (Array.isArray(o.choices) ? o.choices : []).slice(0, 200).map(c => ({ value: str(c && c.value, 60), label: str(c && (c.label ?? c.value), 80), group: str(c && c.group, 40) }));
+      out.value = str(o.value, 60);
+    } else {
+      out.value = fin(o.value) ?? 0; out.min = fin(o.min); out.max = fin(o.max); out.step = fin(o.step);
+    }
+    return out;
+  });
+}
+
+function setOptions(list) {
+  S.options = sanitizeOptions(list);
+  S.lastOption = null;
+  el.orderTab.hidden = !S.options.length;
+  if (!S.options.length) openOrder(false);
+  renderOrderFields();
+  renderOrderPrice();
+}
+
+function renderOrderFields() {
+  el.orderFields.textContent = '';
+  for (const o of S.options) {
+    const wrap = document.createElement('label');
+    wrap.className = 'op-field';
+    const cap = document.createElement('span'); cap.textContent = o.label;
+    let input;
+    if (o.type === 'select') {
+      input = document.createElement('select');
+      let group = null;
+      for (const c of o.choices) {
+        let parent = input;
+        if (c.group) {
+          if (!group || group.label !== c.group) { group = document.createElement('optgroup'); group.label = c.group; input.appendChild(group); }
+          parent = group;
+        } else group = null;
+        const op = document.createElement('option'); op.value = c.value; op.textContent = c.label;
+        parent.appendChild(op);
+      }
+      input.value = o.value;
+    } else {
+      input = document.createElement('input');
+      input.type = 'number'; input.inputMode = 'numeric';
+      if (o.min != null) input.min = o.min;
+      if (o.max != null) input.max = o.max;
+      if (o.step != null) input.step = o.step;
+      input.value = o.value;
+    }
+    input.dataset.key = o.key;
+    input.addEventListener('change', () => {
+      let v = input.value;
+      if (o.type === 'number') {
+        v = Number(v);
+        if (!Number.isFinite(v) || (o.min != null && v < o.min) || (o.max != null && v > o.max)) { input.value = o.value; toast(o.label + ' must be ' + (o.min != null ? 'at least ' + o.min : '') + (o.max != null ? ' and at most ' + o.max : '') + '.'); return; }
+      }
+      if (v === o.value) return;
+      S.lastOption = { key: o.key, prev: o.value };
+      o.value = v;
+      el.orderPrice.classList.add('busy');
+      if (S.embedded) post('pps-design:option', { key: o.key, value: v });
+      else demoOption(o.key, v);
+    });
+    wrap.append(cap, input);
+    if (o.help) { const h = document.createElement('span'); h.className = 'help'; h.textContent = o.help; wrap.appendChild(h); }
+    el.orderFields.appendChild(wrap);
+  }
+}
+
+function renderOrderPrice() {
+  el.orderPrice.classList.remove('busy');
+  el.orderPrice.textContent = '';
+  if (!S.price) {
+    el.orderPrice.hidden = !S.embedded;
+    if (S.embedded) el.orderPrice.textContent = 'Price shown on your order';
+    return;
+  }
+  el.orderPrice.hidden = false;
+  el.orderPrice.append('$' + S.price.total.toFixed(2));
+  const small = document.createElement('small');
+  const bits = [];
+  if (S.price.qty != null) bits.push(S.price.qty.toLocaleString() + ' pieces');
+  if (typeof S.price.turnaround === 'number' && Number.isFinite(S.price.turnaround)) bits.push(S.price.turnaround + ' business day' + (S.price.turnaround === 1 ? '' : 's') + ' to print');
+  small.textContent = bits.join(' · ');
+  el.orderPrice.appendChild(small);
+}
+
+function openOrder(open) {
+  el.orderPanel.classList.toggle('open', open);
+  el.orderTab.setAttribute('aria-expanded', String(open));
+  if (open) { const f = el.orderFields.querySelector('select, input'); if (f) f.focus(); }
+}
+el.orderTab.addEventListener('click', () => openOrder(!el.orderPanel.classList.contains('open')));
+$('orderClose').addEventListener('click', () => { openOrder(false); el.orderTab.focus(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && el.orderPanel.classList.contains('open')) openOrder(false); });
+
+// The calculator refused a change, or the customer backed out of losing a side: put the field back.
+function revertOption() {
+  const l = S.lastOption;
+  S.lastOption = null;
+  if (!l) return;
+  const o = S.options.find(x => x.key === l.key);
+  if (o) o.value = l.prev;
+  renderOrderFields();
+  el.orderPrice.classList.remove('busy');
+  if (S.embedded) post('pps-design:option', { key: l.key, value: l.prev });
+  else demoOption(l.key, l.prev, true);
+}
+
+// A new spec from the calculator while designing: a new size, or sides added or removed.
+function applySpec(spec) {
+  const bad = validSpec(spec);
+  if (bad) { console.warn('ignored a spec that is not usable (' + bad + ')'); revertOption(); return; }
+  const next = { w: spec.trimW, h: spec.trimH, bleed: spec.bleed ?? S.spec.bleed, safety: spec.safety ?? S.spec.safety, pages: spec.pages };
+  const cur = S.spec;
+  const same = (a, b) => Math.abs(a - b) < 0.01;
+  if (same(next.w, cur.w) && same(next.h, cur.h) && same(next.bleed, cur.bleed) && same(next.safety, cur.safety) && next.pages === cur.pages) {
+    S.lastOption = null; el.orderPrice.classList.remove('busy');
+    return;
+  }
+  if (next.pages < cur.pages) {
+    const lost = allPages().slice(next.pages).some(items => items.length);
+    if (lost && !confirm(sideName(next.pages) + ' has a design on it. Printing ' + (next.pages === 1 ? 'one side' : next.pages + ' pages') + ' removes it. Continue?')) { revertOption(); return; }
+  }
+  try { resizeDocument(next); }
+  catch (e) { console.error(e); toast('The design could not be changed to the new size.'); revertOption(); return; }
+  S.lastOption = null;
+}
+
+// Changes the document to the new trim, bleed and page count, and moves and scales what is on
+// it to match: each object keeps its place relative to the card and its shape (scaled evenly, by
+// the smaller of the two changes), and anything that covered the whole card (a background, a
+// photo filling the side) still covers the new one to the bleed. Text keeps its look at the new
+// scale. Undo stops here: the size belongs to the order.
+function resizeDocument(next) {
+  const old = S.spec;
+  const before = (run('document.inspect').spreads || []).map(sp => (sp.items || []).map(it => ({ id: it.id, b: it.bounds, kind: it.kind })));
+  run('layout.documentSetup', { width: next.w, height: next.h, pages: next.pages, bleed: next.bleed });
+  if (Math.abs(next.safety - old.safety) > 0.01) run('layout.marginsAndColumns', { margins: next.safety });
+  const sx = next.w / old.w, sy = next.h / old.h, k = Math.min(sx, sy);
+  before.slice(0, next.pages).forEach((items, page) => items.forEach(({ id, b, kind }) => {
+    const covers = b[0] <= 0.5 && b[1] <= 0.5 && b[2] >= old.w - 0.5 && b[3] >= old.h - 0.5;
+    let to;
+    if (covers) to = [-next.bleed, -next.bleed, next.w + next.bleed, next.h + next.bleed];
+    else {
+      const cx = (b[0] + b[2]) / 2 * sx, cy = (b[1] + b[3]) / 2 * sy, hw = (b[2] - b[0]) / 2 * k, hh = (b[3] - b[1]) / 2 * k;
+      to = [cx - hw, cy - hh, cx + hw, cy + hh];
+    }
+    if (!to.every((v, i) => Math.abs(v - b[i]) < 0.01)) run('transform.resize', { from: b, to, content: false, ids: [id] });
+    if (kind === '<image>') run('object.fit', { mode: 'fillProportionally', ids: [id] });
+    if (kind === '<text frame>' && S.style.has(id) && Math.abs(k - 1) > 0.01) {
+      const st = S.style.get(id);
+      st.size = Math.max(4, Math.round(st.size * k * 2) / 2);
+      run('selection.set', { ids: [id] });
+      run('type.char', { attrs: { size: st.size } });
+      fitText(id, page);
+    }
+  }));
+  S.spec = next;
+  el.productSize.textContent = inch(next.w) + ' × ' + inch(next.h) + ' in';
+  if (S.page >= next.pages) S.page = next.pages - 1;
+  S.sel = null;
+  S.dirty = true;
+  S.canRedo = false;
+  try { S.undoFloor = (run('document.history').undo || []).length; } catch { S.undoFloor = Infinity; }
+  buildSides();
+  el.pagesList.textContent = '';
+  layout();
+}
+
+// Standalone (the preview), the page plays the calculator's part with a few sizes, so the
+// panel can be tried. No prices: those only ever come from the calculator.
+const DEMO_SIZES = [[3.5, 2], [5, 3], [6, 4], [7, 5], [8.5, 5.5], [9, 6], [11, 8.5]];
+const DEMO = { size: '9x6', orientation: 'landscape', sides: '2', qty: 250 };
+function demoOptions() {
+  return [
+    { key: 'size', label: 'Size', type: 'select', value: DEMO.size, choices: DEMO_SIZES.map(([l, s]) => ({ value: l + 'x' + s, label: l + ' × ' + s + ' in' })) },
+    { key: 'orientation', label: 'Orientation', type: 'select', value: DEMO.orientation, choices: [{ value: 'landscape', label: 'Landscape (wide)' }, { value: 'portrait', label: 'Portrait (tall)' }] },
+    { key: 'sides', label: 'Sides printed', type: 'select', value: DEMO.sides, choices: [{ value: '2', label: 'Both sides' }, { value: '1', label: 'Front only' }] },
+    { key: 'qty', label: 'Quantity', type: 'number', value: DEMO.qty, min: 1, max: 99999, step: 1, help: 'In a real order the calculator updates the price.' },
+  ];
+}
+function demoSpec() {
+  const [l, s] = DEMO.size.split('x').map(Number);
+  const [w, h] = DEMO.orientation === 'portrait' ? [s, l] : [l, s];
+  return { trimW: w * 72, trimH: h * 72, bleed: 9, safety: 9, pages: Number(DEMO.sides), pageMultiple: 1 };
+}
+function demoOption(key, value, reverting) {
+  if (!(key in DEMO)) return;
+  DEMO[key] = value;
+  if (reverting) return;
+  setOptions(demoOptions());
+  applySpec(demoSpec());
+}
+
+// ── small things ─────────────────────────────────────────────
+
+let toastTimer = 0;
+function toast(msg, ms = 4000) {
+  el.toast.textContent = msg;
+  el.toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.toast.hidden = true; }, ms);
+}
+
+function showFatal(msg) {
+  el.app.classList.add('loading');
+  el.loader.querySelector('.spinner').hidden = true;
+  el.loadMsg.textContent = msg;
+  el.loadBar.parentElement.hidden = true;
+}
+
+new ResizeObserver(() => layout()).observe(el.stage);
+
+// ── start ────────────────────────────────────────────────────
+
+(async () => {
+  buildSwatches();
+  let saved = 'simple';
+  try { saved = localStorage.getItem(MODE_KEY) === 'adv' ? 'adv' : 'simple'; } catch { /* no storage: Simple */ }
+  setMode(saved);
+  openDrawer('text');
+  if (matchMedia('(max-width: 860px)').matches) closeDrawer();
+  try {
+    await loadEngine();
+  } catch (e) {
+    console.error(e);
+    post('pps-design:error', { message: String(e.message || e) });
+    showFatal('The designer couldn\'t load. Check your connection and try again.');
+    return;
+  }
+  el.app.classList.remove('loading');
+  if (S.embedded) {
+    post('pps-design:ready');
+  } else {
+    el.demo.hidden = false;
+    try { startJob(demoJob()); }
+    catch (e) { console.error(e); showFatal('This size can\'t be designed online.'); }
+  }
+})();
+
+</script>
+</body>
+</html>
