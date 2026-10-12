@@ -99,13 +99,19 @@ function changed() {
 // 9 MB instead of 23, which fits the store's 12 MB pull-deploy cap and downloads quickly from a
 // server that doesn't compress .wasm itself. The page unpacks it with DecompressionStream. If a
 // server does decompress it on the way (Content-Encoding: gzip), the bytes already start with the
-// wasm magic number and are used as they are.
+// wasm magic number and are used as they are. The one-file release (shell/bundle.mjs) carries its
+// manifest inside the page, as #designer-manifest; the plain build fetches it.
 async function loadEngine() {
   let file = 'pps_bridge_bg.wasm', total = 0;
   try {
-    const m = await fetch('designer-manifest.json', { cache: 'no-store' });
-    if (m.ok) {
-      const man = await m.json();
+    const inline = document.getElementById('designer-manifest');
+    let man = null;
+    if (inline) man = JSON.parse(inline.textContent);
+    else {
+      const m = await fetch('designer-manifest.json', { cache: 'no-store' });
+      if (m.ok) man = await m.json();
+    }
+    if (man) {
       if (typeof man.wasm === 'string' && /^[\w.-]+$/.test(man.wasm)) file = man.wasm;
       total = man.wasmFileBytes || man.wasmBytes || 0;
     }

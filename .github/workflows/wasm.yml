@@ -135,6 +135,17 @@ jobs:
           PPS_PLAYWRIGHT="$RUNNER_TEMP/pw/node_modules/playwright" PPS_SHOT=dist/payload-shot.png \
             node shell/test/designer.e2e.mjs dist/designer
 
+      # The store's copy: two files named by the commit (shell/bundle.mjs says why), driven
+      # through the same end-to-end test as the plain build.
+      - name: Designer release bundle
+        run: |
+          node shell/bundle.mjs dist/designer dist/release "pps-designer-${BUILD_SHA}"
+          mkdir -p dist/bundle-test
+          cp "dist/release/pps-designer-${BUILD_SHA}.html" dist/bundle-test/designer.html
+          cp "dist/release/pps-designer-${BUILD_SHA}.wasm.gz" dist/bundle-test/
+          PPS_PLAYWRIGHT="$RUNNER_TEMP/pw/node_modules/playwright" \
+            node shell/test/designer.e2e.mjs dist/bundle-test
+
       - name: Measure payloads (0.2)
         run: |
           bash .github/scripts/wasm-payload.sh dist/designer dist/payload/designer
@@ -155,6 +166,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          name: designer-release-${{ env.BUILD_SHA }}
+          path: dist/release
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
           name: payload-${{ env.BUILD_SHA }}
           path: dist/payload
           if-no-files-found: error
@@ -164,10 +181,11 @@ jobs:
         with:
           path: dist/site
 
-  # A designer release for the store: every main build is committed under
-  # releases/<sha>/ on the designer-releases branch, so the store pulls it with
-  # pps_plugin_download_url from raw.githubusercontent.com, pinned by commit (its
-  # deploy tool takes https URLs of up to 12 MB; the gzipped engine is ~9 MB).
+  # A designer release for the store: every main build's two files
+  # (pps-designer-<sha>.html and .wasm.gz) are committed under releases/<sha>/ on the
+  # designer-releases branch, so the store pulls them with pps_plugin_download_url from
+  # raw.githubusercontent.com, pinned by commit (its deploy tool takes https URLs of up
+  # to 12 MB and writes only into existing folders; the gzipped engine is ~9 MB).
   release:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: web
@@ -180,7 +198,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: designer-site-${{ env.BUILD_SHA }}
+          name: designer-release-${{ env.BUILD_SHA }}
           path: site
       - name: Commit the release to designer-releases
         env:
@@ -193,7 +211,8 @@ jobs:
           else git checkout -q --orphan designer-releases; fi
           dest="releases/${BUILD_SHA}"
           mkdir -p "$dest"
-          for f in designer.html designer.js designer.css pps_bridge.js pps_bridge_bg.wasm.gz designer-manifest.json; do
+          files="pps-designer-${BUILD_SHA}.html pps-designer-${BUILD_SHA}.wasm.gz"
+          for f in $files; do
             cp "../site/$f" "$dest/$f"
           done
           git add "$dest"
@@ -204,11 +223,14 @@ jobs:
           {
             echo "### Designer release \`${BUILD_SHA:0:7}\`"
             echo
-            echo "Pull each file into \`wp-content/plugins/pps-calculators/designer/${BUILD_SHA}/\` from:"
+            echo "Pull each file into \`wp-content/plugins/pps-calculators/\` under the same name, from:"
             echo
-            for f in designer.html designer.js designer.css pps_bridge.js pps_bridge_bg.wasm.gz designer-manifest.json; do
+            for f in $files; do
               echo "- https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${rel}/${dest}/$f"
             done
+            echo
+            echo "Then PPS Config → Artwork → Online Designer URL:"
+            echo "\`/wp-content/plugins/pps-calculators/pps-designer-${BUILD_SHA}.html\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Publish main's build to GitHub Pages (Settings → Pages → Source: GitHub Actions). Runs on
