@@ -1,8 +1,15 @@
-// PPS Designer, simple mode: the editor customers see.
+// PPS Designer: the editor customers see.
 //
-// One page, plain JS, no framework, laid out the way people know from Canva: a rail of four
-// things to add (Text, Photos, Shapes, Background), a drawer for the one that's open, a toolbar
-// above the design for whatever is selected, and the design itself. Everything the customer does
+// One page, plain JS, no framework. Two workspaces over the same document:
+//   Simple (the default), laid out the way people know from Canva: a rail of four things to add
+//   (Text, Photos, Shapes, Background), a drawer for the one that's open, a toolbar above the
+//   design for whatever is selected, and the design itself.
+//   Advanced, laid out like InDesign's print workspace: tools on the left, a Control bar of exact
+//   values (X, Y, W, H in inches, rotation, fill, stroke, opacity, type), and Pages, Layers,
+//   Swatches and Align panels on the right, with zoom.
+// Both have Order options: a tab on the right that slides out the order's size, sides and
+// quantity, as the calculator offers them; a change goes back to the calculator, which re-prices
+// and, for a new size or sides, sends the new spec, and the design follows. Everything the customer does
 // is an engine command through the bridge (crates/pps-bridge), so undo, the preview and the print
 // file all come from the same document. The calculator that opens this page owns the product spec,
 // the price and the cart; this page only designs and hands back a print file (brief §6, CLAUDE.md).
@@ -40,6 +47,16 @@ const FONTS = {
 const ALIGNS = ['left', 'center', 'right'];
 const ALIGN_ICON = { left: 'M4 6h16M4 12h10M4 18h16', center: 'M4 6h16M7 12h10M4 18h16', right: 'M4 6h16M10 12h10M4 18h16' };
 
+// The bundled typefaces (crates/fonts, OFL) and their styles, for the Control bar.
+const FAMILIES = {
+  'Source Sans 3': ['Regular', 'Italic', 'Semibold', 'Bold'],
+  'Source Serif 4': ['Regular', 'Italic', 'Semibold', 'Bold', 'Bold Italic'],
+  'Inter': ['Regular', 'Medium', 'SemiBold'],
+  'JetBrains Mono': ['Regular'],
+};
+const MODE_KEY = 'pps-designer-mode';
+const TOOL_KEYS = { v: 'select', t: 'text', m: 'rect', l: 'ellipse', '\\': 'line', f: 'image' };
+
 const $ = id => document.getElementById(id);
 const el = {
   app: $('app'), canvas: $('canvas'), stage: $('stage'), sides: $('sides'), warnings: $('warnings'),
@@ -51,6 +68,13 @@ const el = {
   sizeOut: $('sizeOut'), alignIcon: $('alignIcon'), textEditor: $('textEditor'), textInput: $('textInput'),
   emptyHint: $('emptyHint'), sheet: $('sheet'), checks: $('checks'), loader: $('loader'), loadMsg: $('loadMsg'),
   loadBar: $('loadBar'), toast: $('toast'),
+  modeSimple: $('modeSimple'), modeAdv: $('modeAdv'), control: $('control'), ctlNone: $('ctlNone'), ctlObj: $('ctlObj'), ctlText: $('ctlText'),
+  ctlX: $('ctlX'), ctlY: $('ctlY'), ctlW: $('ctlW'), ctlH: $('ctlH'), ctlRot: $('ctlRot'), ctlFill: $('ctlFill'), ctlStroke: $('ctlStroke'),
+  ctlFillChip: $('ctlFillChip'), ctlStrokeChip: $('ctlStrokeChip'), ctlWeight: $('ctlWeight'), ctlOpacity: $('ctlOpacity'),
+  ctlFont: $('ctlFont'), ctlStyle: $('ctlStyle'), ctlSize: $('ctlSize'), ctlLeading: $('ctlLeading'), ctlTracking: $('ctlTracking'),
+  pagesList: $('pagesList'), layersList: $('layersList'), swatchList: $('swatchList'), swatchNew: $('swatchNew'), alignTo: $('alignTo'),
+  fsFill: $('fsFill'), fsStroke: $('fsStroke'), zoomPct: $('zoomPct'),
+  orderTab: $('orderTab'), orderPanel: $('orderPanel'), orderPrice: $('orderPrice'), orderFields: $('orderFields'),
 };
 
 const S = {
@@ -73,6 +97,18 @@ const S = {
   dirty: false,
   replaceInto: null,
   cat: 'text',           // the open drawer
+  mode: 'simple',        // 'simple' | 'adv'
+  tool: 'select',        // Advanced tools: select | text | rect | ellipse | line | image
+  zoom: 1,               // Advanced zoom, relative to fitting the page in the window
+  fsTarget: 'fill',      // Swatches panel: fill or stroke
+  allItems: [],          // current page's items including hidden ones (Layers panel)
+  swatches: [],          // the document's swatch names
+  opacity: new Map(),    // item id → opacity %, when set here
+  options: [],           // Order options from the calculator: [{key, label, type, value, choices?, min?, max?, step?, help?}]
+  lastOption: null,      // {key, prev}: the change waiting on the calculator, to put back if refused
+  price: null,           // the last price the calculator sent (display only)
+  undoFloor: 0,          // undo history length when the order's size last changed: undo stops there
+  undoDepth: 0,
 };
 
 // ── the bridge ────────────────────────────────────────────────
@@ -179,6 +215,8 @@ function startJob(job) {
   el.productSize.textContent = inches(S.spec.w) + ' × ' + inches(S.spec.h) + ' in';
   buildSides();
   S.dirty = opened;
+  S.undoFloor = 0;
+  if (Array.isArray(job.options)) setOptions(job.options);
   el.print.disabled = false;
   layout();
 }
@@ -188,7 +226,12 @@ function demoJob() {
   const num = (k, d) => { const v = parseFloat(q.get(k)); return Number.isFinite(v) && v > 0 ? v : d; };
   const w = num('w', 9), h = num('h', 6), pages = Math.round(num('pages', 2));
   if (q.get('product')) el.productName.textContent = q.get('product').slice(0, 60);
-  return { spec: { trimW: w * 72, trimH: h * 72, bleed: 9, safety: 9, pages, pageMultiple: 1, folds: [], bindEdge: null, spine: 0 } };
+  const size = DEMO_SIZES.find(([l, s]) => l === Math.max(w, h) && s === Math.min(w, h));
+  if (size) DEMO.size = size[0] + 'x' + size[1];
+  DEMO.orientation = h > w ? 'portrait' : 'landscape';
+  DEMO.sides = String(pages);
+  return { spec: { trimW: w * 72, trimH: h * 72, bleed: 9, safety: 9, pages, pageMultiple: 1, folds: [], bindEdge: null, spine: 0 },
+           options: size && pages <= 2 ? demoOptions() : [] };
 }
 
 // ── messages with the calculator (same origin only) ──────────
@@ -207,14 +250,24 @@ window.addEventListener('message', ev => {
     try { startJob(m); }
     catch (e) { post('pps-design:error', { message: String(e.message || e) }); showFatal('This product can\'t be designed online yet.'); }
   } else if (m.type === 'pps-design:price') {
-    // Display only. The calculator computes it; nothing here does.
-    const t = m.total;
-    if (typeof t === 'number' && Number.isFinite(t)) {
-      el.price.textContent = '$' + t.toFixed(2) + (Number.isInteger(m.qty) ? ' · ' + m.qty.toLocaleString() + ' pcs' : '');
-      el.price.hidden = false;
-    } else el.price.hidden = true;
+    showPrice(m);
+  } else if (m.type === 'pps-design:options') {
+    if (Array.isArray(m.options)) setOptions(m.options);
+  } else if (m.type === 'pps-design:spec') {
+    if (S.d && S.spec) applySpec(m.spec);
   }
 });
+
+// Display only. The calculator computes the price; nothing here does.
+function showPrice(m) {
+  const t = m && m.total;
+  if (typeof t === 'number' && Number.isFinite(t)) {
+    S.price = { total: t, qty: Number.isInteger(m.qty) ? m.qty : null, turnaround: m.turnaround };
+    el.price.textContent = '$' + t.toFixed(2) + (S.price.qty != null ? ' · ' + S.price.qty.toLocaleString() + ' pcs' : '');
+    el.price.hidden = false;
+  } else { S.price = null; el.price.hidden = true; }
+  renderOrderPrice();
+}
 
 // ── layout and drawing ───────────────────────────────────────
 
@@ -238,9 +291,11 @@ function buildSides() {
 function layout() {
   if (!S.spec) return;
   const W = S.spec.w + 2 * S.spec.bleed, H = S.spec.h + 2 * S.spec.bleed;
-  const r = el.stage.getBoundingClientRect();
   const pad = 8;
-  S.k = Math.max(0.05, Math.min((r.width - pad * 2) / W, (r.height - pad * 2) / H));
+  // offsetWidth, not clientWidth: a zoomed design's scrollbars must not change the fit (and loop).
+  const fit = Math.max(0.05, Math.min((el.stage.offsetWidth - pad * 2) / W, (el.stage.offsetHeight - pad * 2) / H));
+  S.k = S.mode === 'adv' ? Math.max(0.05, fit * S.zoom) : fit;
+  if (el.zoomPct) el.zoomPct.textContent = Math.round(S.k / (96 / 72) * 100) + '%';
   S.dpr = Math.min(window.devicePixelRatio || 1, 3);
   const cw = Math.floor(W * S.k), ch = Math.floor(H * S.k);
   el.canvas.style.width = cw + 'px';
@@ -263,11 +318,14 @@ function refresh() {
 
 function readDocument() {
   const ins = run('document.inspect');
-  S.canUndo = !!ins.canUndo;
+  try { S.undoDepth = (run('document.history').undo || []).length; } catch { S.undoDepth = ins.canUndo ? S.undoFloor + 1 : S.undoFloor; }
+  S.canUndo = !!ins.canUndo && S.undoDepth > S.undoFloor;
   const sp = (ins.spreads || [])[S.page] || { items: [] };
-  S.items = (sp.items || []).filter(it => !it.hidden);
+  S.allItems = sp.items || [];
+  S.items = S.allItems.filter(it => !it.hidden);
   S.stories = new Map((ins.stories || []).map(s => [s.id, s]));
-  for (const n of ins.swatches || []) if (!S.swatchNames.has(n)) S.swatchNames.set(n, n);
+  S.swatches = ins.swatches || [];
+  for (const n of S.swatches) if (!S.swatchNames.has(n)) S.swatchNames.set(n, n);
   if (S.sel != null && !S.items.some(it => it.id === S.sel)) S.sel = null;
 }
 
@@ -321,11 +379,19 @@ function draw() {
     ctx.strokeRect(r.x, r.y, r.w, r.h); ctx.setLineDash([]);
   }
 
+  if (S.drag && S.drag.mode === 'draw' && S.drag.moved) {
+    const b = drawRect(S.drag);
+    ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    if (S.drag.tool === 'ellipse') {
+      ctx.beginPath(); ctx.ellipse(px((b[0] + b[2]) / 2), px((b[1] + b[3]) / 2), (b[2] - b[0]) * S.k / 2, (b[3] - b[1]) * S.k / 2, 0, 0, Math.PI * 2); ctx.stroke();
+    } else ctx.strokeRect(px(b[0]), px(b[1]), Math.max(1, (b[2] - b[0]) * S.k), Math.max(1, (b[3] - b[1]) * S.k));
+    ctx.setLineDash([]);
+  }
   const sel = selected();
   if (!sel) return;
   let r = itemRect(sel);
   const d = S.drag;
-  if (d && d.moved) {
+  if (d && d.moved && d.mode !== 'draw') {
     if (d.mode === 'move') {
       // A ghost of the item where it will land; the real move happens on release.
       ctx.globalAlpha = 0.85;
@@ -403,8 +469,9 @@ function updateChrome() {
   const msgs = [...new Set(S.items.flatMap(problemsOf))];
   el.warnings.textContent = '';
   for (const m of msgs) { const d = document.createElement('div'); d.textContent = m; el.warnings.appendChild(d); }
-  el.emptyHint.hidden = S.items.length > 0;
+  el.emptyHint.hidden = S.items.length > 0 || S.mode === 'adv';
   updateContextBar();
+  if (S.mode === 'adv' && S.spec) { updateControl(); updatePanels(); }
 }
 
 function updateContextBar() {
@@ -523,14 +590,22 @@ function applyTextStyle(patch) {
 // Text boxes fit their words, as in Canva: after the words or their size change, the box shrinks
 // to its lines and then grows a line at a time until nothing is left over. (The engine stores an
 // auto-size setting but does not apply it while composing, so this does.)
-function fitText(id) {
+function fitText(id, page = S.page) {
   const find = () => {
     const ins = run('document.inspect');
-    const it = (((ins.spreads || [])[S.page] || {}).items || []).find(x => x.id === id);
+    const it = (((ins.spreads || [])[page] || {}).items || []).find(x => x.id === id);
     const st = it && (ins.stories || []).find(x => x.id === it.story);
     return it && st ? { it, st } : null;
   };
-  const lineH = textStyle(id).size * 1.2;
+  // One line, from the type as the engine has it (a frame from IDML or the Control bar may
+  // differ from this page's own note of it).
+  let lineH = textStyle(id).size * 1.2;
+  try {
+    run('selection.set', { ids: [id] });
+    const ch = (run('type.selectionAttrs') || {}).chars || {};
+    if (ch.leading && ch.leading.kind === 'points' && ch.leading.value > 0) lineH = ch.leading.value;
+    else if (ch.size > 0) lineH = ch.size * 1.2;
+  } catch { /* keep the page's note */ }
   let f = find();
   if (!f) return;
   const [x0, y0, x1, y1] = f.it.bounds;
@@ -593,9 +668,11 @@ function placeTextEditor() {
   if (!isText(it)) { closeTextEditor(); return; }
   const r = itemRect(it);
   const c = el.canvas.getBoundingClientRect(), st = el.stage.getBoundingClientRect();
-  const left = Math.max(0, Math.min(c.left - st.left + r.x, st.width - el.textEditor.offsetWidth));
-  let top = c.top - st.top + r.y + r.h + 8;
-  if (top + el.textEditor.offsetHeight > st.height) top = Math.max(0, c.top - st.top + r.y - el.textEditor.offsetHeight - 8);
+  // The editor sits in the stage, which scrolls when Advanced zooms in.
+  const sl = el.stage.scrollLeft, stp = el.stage.scrollTop;
+  const left = Math.max(sl, Math.min(c.left - st.left + sl + r.x, sl + st.width - el.textEditor.offsetWidth));
+  let top = c.top - st.top + stp + r.y + r.h + 8;
+  if (top + el.textEditor.offsetHeight > stp + st.height) top = Math.max(stp, c.top - st.top + stp + r.y - el.textEditor.offsetHeight - 8);
   el.textEditor.style.left = left + 'px';
   el.textEditor.style.top = top + 'px';
 }
@@ -859,6 +936,7 @@ el.filePick.addEventListener('change', async () => {
     return;
   }
   resetLocalState();
+  S.undoFloor = 0;
   S.dirty = true;
   afterAdd();
   refresh();
@@ -871,15 +949,17 @@ function hit(x, y) {
   const p = [pt(x), pt(y)];
   for (let i = S.items.length - 1; i >= 0; i--) {
     const it = S.items[i];
+    if (it.locked) continue;
     const [x0, y0, x1, y1] = it.bounds;
-    if (p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1) return it;
+    const slop = it.bounds[3] - it.bounds[1] < 4 || it.bounds[2] - it.bounds[0] < 4 ? 4 / S.k : 0;   // lines are thin
+    if (p[0] >= x0 - slop && p[0] <= x1 + slop && p[1] >= y0 - slop && p[1] <= y1 + slop) return it;
   }
   return null;
 }
 
 function handleAt(x, y) {
   const it = selected();
-  if (!it || isBackground(it)) return -1;
+  if (!it || isBackground(it) || it.locked) return -1;
   const reach = 22;
   return corners(itemRect(it)).findIndex(([hx, hy]) => Math.hypot(hx - x, hy - y) <= reach);
 }
@@ -888,6 +968,12 @@ el.canvas.addEventListener('pointerdown', e => {
   if (!S.spec) return;
   closeColours();
   const x = e.offsetX, y = e.offsetY;
+  if (S.mode === 'adv' && S.tool !== 'select') {
+    if (!el.textEditor.hidden) { commitText(); closeTextEditor(); }
+    S.drag = { mode: 'draw', tool: S.tool, x, y, p0: [pt(x), pt(y)], p1: [pt(x), pt(y)], moved: false, shift: e.shiftKey };
+    el.canvas.setPointerCapture(e.pointerId);
+    return;
+  }
   const h = handleAt(x, y);
   if (h >= 0) {
     const it = selected();
@@ -907,6 +993,12 @@ el.canvas.addEventListener('pointermove', e => {
   const dxCss = e.offsetX - d.x, dyCss = e.offsetY - d.y;
   if (!d.moved && Math.hypot(dxCss, dyCss) < 4) return;
   d.moved = true;
+  if (d.mode === 'draw') {
+    d.p1 = [pt(e.offsetX), pt(e.offsetY)];
+    d.shift = e.shiftKey;
+    draw();
+    return;
+  }
   if (d.mode === 'move') {
     let dx = dxCss / S.k, dy = dyCss / S.k;
     // Snap the item's centre to the middle of the card.
@@ -931,6 +1023,7 @@ function endDrag() {
   const d = S.drag;
   S.drag = null;
   if (!d) return;
+  if (d.mode === 'draw') { createDrawn(d); return; }
   if (!d.moved) {
     draw();
     // A second tap on selected text (or a double-click) opens its words for editing.
@@ -959,7 +1052,16 @@ el.canvas.addEventListener('dblclick', () => { if (isText(selected())) openTextE
 
 el.undo.addEventListener('click', undo);
 el.redo.addEventListener('click', redo);
-function undo() { closeTextEditor(); if (tryRun('edit.undo', {}) !== undefined) { S.dirty = true; S.canRedo = true; refresh(); } }
+function undo() {
+  closeTextEditor();
+  // A size or sides change came from the order (Order options): undo stops there, so the design
+  // can never drift from the size the calculator is pricing.
+  if (S.undoDepth <= S.undoFloor) {
+    if (S.undoFloor > 0) toast('To change the size or sides, use Order options.');
+    return;
+  }
+  if (tryRun('edit.undo', {}) !== undefined) { S.dirty = true; S.canRedo = true; refresh(); }
+}
 function redo() {
   closeTextEditor();
   try { run('edit.redo', {}); } catch { S.canRedo = false; updateChrome(); return; }
@@ -971,14 +1073,22 @@ document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (typing) return;
-  if (e.key === 'Escape') { closeColours(); select(null); return; }
+  if (S.mode === 'adv') {
+    if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); setZoom(S.zoom * 1.25); return; }
+    if (mod && e.key === '-') { e.preventDefault(); setZoom(S.zoom / 1.25); return; }
+    if (mod && e.key === '0') { e.preventDefault(); setZoom(1); return; }
+    if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); S.replaceInto = null; el.photoPick.click(); return; }
+    const t = !mod && !e.altKey && TOOL_KEYS[e.key.toLowerCase()];
+    if (t) { e.preventDefault(); setTool(t); return; }
+  }
+  if (e.key === 'Escape') { closeColours(); if (S.mode === 'adv' && S.tool !== 'select') setTool('select'); select(null); return; }
   if (!S.sel) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeSelected(); return; }
   if (e.key === 'Enter' && isText(selected())) { e.preventDefault(); openTextEditor(); return; }
   const step = e.shiftKey ? 9 : 1;
   const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
   const it = selected();
-  if (mv && it && !isBackground(it)) {
+  if (mv && it && !isBackground(it) && !it.locked) {
     e.preventDefault();
     if (tryRun('transform.move', { dx: mv[0], dy: mv[1], ids: [it.id] }) !== undefined) changed();
   }
@@ -1072,6 +1182,635 @@ el.back.addEventListener('click', () => {
 });
 window.addEventListener('beforeunload', e => { if (!S.embedded && S.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
+// ── Advanced Mode: InDesign's print workspace, over the same document ──
+
+function setMode(mode) {
+  if (mode === 'adv' && matchMedia('(max-width: 860px)').matches) mode = 'simple';
+  S.mode = mode;
+  el.app.classList.toggle('adv', mode === 'adv');
+  el.modeSimple.setAttribute('aria-pressed', String(mode === 'simple'));
+  el.modeAdv.setAttribute('aria-pressed', String(mode === 'adv'));
+  try { localStorage.setItem(MODE_KEY, mode); } catch { /* a private window keeps no setting */ }
+  if (mode !== 'adv') { setTool('select'); S.zoom = 1; }
+  closeColours();
+  if (mode === 'adv') { S.pageThumbsKey = ''; }
+  // The stage changes size with the panels: lay out once the grid has settled.
+  requestAnimationFrame(() => { if (S.spec) { layout(); updateChrome(); } });
+}
+el.modeSimple.addEventListener('click', () => setMode('simple'));
+el.modeAdv.addEventListener('click', () => setMode('adv'));
+
+function setTool(t) {
+  S.tool = t;
+  document.querySelectorAll('.tool[data-tool]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tool === t)));
+  el.canvas.style.cursor = t === 'select' ? '' : t === 'text' ? 'text' : 'crosshair';
+}
+document.querySelectorAll('.tool[data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+$('toolPlace').addEventListener('click', () => { S.replaceInto = null; el.photoPick.click(); });
+$('toolOpen').addEventListener('click', () => el.filePick.click());
+
+function setZoom(z) {
+  S.zoom = Math.min(8, Math.max(0.25, z));
+  layout();
+}
+$('zoomIn').addEventListener('click', () => setZoom(S.zoom * 1.25));
+$('zoomOut').addEventListener('click', () => setZoom(S.zoom / 1.25));
+$('zoomFit').addEventListener('click', () => setZoom(1));
+el.stage.addEventListener('wheel', e => {
+  if (S.mode !== 'adv' || !(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  setZoom(S.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+}, { passive: false });
+
+// Drawing with a tool: the rectangle being dragged, in page points.
+function drawRect(d) {
+  let [x0, y0] = d.p0, [x1, y1] = d.p1;
+  if (d.tool === 'line') {
+    if (Math.abs(x1 - x0) >= Math.abs(y1 - y0)) y1 = y0; else x1 = x0;
+  } else if (d.shift) {
+    const s = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+    x1 = x0 + Math.sign(x1 - x0 || 1) * s; y1 = y0 + Math.sign(y1 - y0 || 1) * s;
+  }
+  return [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
+}
+
+function createDrawn(d) {
+  let b = drawRect(d);
+  if (!d.moved || (b[2] - b[0] < 3 && b[3] - b[1] < 3)) {
+    // A click without a drag makes one at a standard size, as InDesign's dialog would.
+    const [x, y] = d.p0;
+    const [w, h] = { text: [216, 36], line: [144, 0], image: [144, 108] }[d.tool] || [72, 72];
+    b = [x, y, x + w, y + h];
+  }
+  try {
+    let id;
+    if (d.tool === 'text') {
+      id = run('frame.create', { spread: S.page, rect: b, content: 'text', text: '' }).id;
+      S.style.set(id, { font: 'clean', bold: false, size: 12, align: 'left', colour: 'Black' });
+      run('selection.set', { ids: [id] });
+      run('type.char', { attrs: { fontFamily: FONTS.clean.family, fontStyle: 'Regular', size: 12, fill: '[Black]' } });
+    } else if (d.tool === 'image') {
+      id = run('frame.create', { spread: S.page, rect: b, content: 'graphic' }).id;
+    } else {
+      // InDesign's defaults for a drawn shape: no fill, a 1 pt black stroke.
+      id = run('frame.create', { spread: S.page, rect: b, shape: d.tool === 'ellipse' ? 'ellipse' : 'rectangle', content: 'unassigned' }).id;
+      run('object.fill', { swatch: '[None]', ids: [id] });
+      run('object.stroke', { swatch: '[Black]', weight: 1, ids: [id] });
+    }
+    S.sel = id;
+    changed();
+    if (d.tool === 'text') openTextEditor();
+    if (d.tool === 'image') { S.replaceInto = id; el.photoPick.click(); }
+  } catch (e) { console.error(e); toast('That could not be drawn. Please try again.'); draw(); }
+}
+
+// ── the Control bar ──
+
+const inch = v => +(v / 72).toFixed(3);
+const num = input => { const v = parseFloat(input.value); return Number.isFinite(v) ? v : null; };
+function setIfIdle(input, v) { if (document.activeElement !== input) input.value = v; }
+
+// A swatch's colour for its chip: the known ones, and CMYK read from a "C=… M=… Y=… K=…" name.
+function swatchCss(name) {
+  if (!name || name === '[None]') return null;
+  if (name === '[Paper]') return '#ffffff';
+  if (name === '[Black]' || name === '[Registration]') return '#231f20';
+  const known = COLOURS.find(c => 'PPS ' + c.name === name || c.swatch === name);
+  if (known) return known.css;
+  const m = /C=([\d.]+)\s+M=([\d.]+)\s+Y=([\d.]+)\s+K=([\d.]+)/.exec(name);
+  if (m) {
+    const [c, mm, y, k] = m.slice(1).map(v => Math.min(100, +v) / 100);
+    const ch = v => Math.round(255 * (1 - v) * (1 - k));
+    return 'rgb(' + ch(c) + ',' + ch(mm) + ',' + ch(y) + ')';
+  }
+  return '#b9bcc2';
+}
+function paintChip(chip, name) {
+  const css = swatchCss(name);
+  chip.classList.toggle('none', !css);
+  if (chip.classList.contains('stroke')) { chip.style.borderColor = css || '#999'; chip.style.background = ''; }
+  else chip.style.background = css || '';
+}
+
+function swatchSelect(sel, current) {
+  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]')];
+  if (current && !names.includes(current)) names.push(current);
+  const key = names.join('|');
+  if (sel.dataset.key !== key) {
+    sel.textContent = '';
+    for (const n of names) { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); }
+    sel.dataset.key = key;
+  }
+  if (document.activeElement !== sel) sel.value = current || '[None]';
+}
+
+for (const f of Object.keys(FAMILIES)) { const o = document.createElement('option'); o.value = o.textContent = f; el.ctlFont.appendChild(o); }
+function styleOptions(family, current) {
+  const styles = FAMILIES[family] || [current || 'Regular'];
+  el.ctlStyle.textContent = '';
+  for (const st of styles) { const o = document.createElement('option'); o.value = o.textContent = st; el.ctlStyle.appendChild(o); }
+  if (current && !styles.includes(current)) { const o = document.createElement('option'); o.value = o.textContent = current; el.ctlStyle.appendChild(o); }
+  el.ctlStyle.value = current || styles[0];
+}
+
+// The text's own attributes, as the engine resolves them (not what this page last set).
+function textAttrs(it) {
+  try { run('selection.set', { ids: [it.id] }); return run('type.selectionAttrs') || {}; }
+  catch (e) { console.error(e); return {}; }
+}
+
+function updateControl() {
+  const it = selected();
+  el.ctlObj.hidden = !it;
+  el.ctlText.hidden = !isText(it);
+  el.ctlNone.hidden = !!it;
+  if (!it) {
+    el.ctlNone.textContent = 'Page ' + inch(S.spec.w) + ' × ' + inch(S.spec.h) + ' in · bleed ' + inch(S.spec.bleed) +
+      ' in · keep words ' + inch(S.spec.safety) + ' in inside the cut · ' + (S.items.length ? 'click something to change it' : 'draw with a tool on the left');
+    return;
+  }
+  const [x0, y0, x1, y1] = it.bounds;
+  setIfIdle(el.ctlX, inch(x0)); setIfIdle(el.ctlY, inch(y0));
+  setIfIdle(el.ctlW, inch(x1 - x0)); setIfIdle(el.ctlH, inch(y1 - y0));
+  let rot = 0;
+  try { rot = (run('transform.info', { ids: [it.id] }) || {}).rotation || 0; } catch { /* a group has none of its own */ }
+  setIfIdle(el.ctlRot, +rot.toFixed(2));
+  const attrs = isText(it) ? textAttrs(it) : null;
+  const ch = (attrs && attrs.chars) || {};
+  // A text frame's Fill is its words' colour (what people mean); its Stroke is the frame's edge.
+  const fill = isText(it) ? (ch.fill || '[Black]') : it.fill;
+  swatchSelect(el.ctlFill, fill); paintChip(el.ctlFillChip, fill);
+  el.ctlFill.closest('.ctl').dataset.tip = isText(it) ? 'Text colour' : 'Fill swatch';
+  swatchSelect(el.ctlStroke, it.stroke && it.stroke.swatch); paintChip(el.ctlStrokeChip, it.stroke && it.stroke.swatch);
+  setIfIdle(el.ctlWeight, it.stroke ? +(+it.stroke.weight || 0).toFixed(2) : 0);
+  setIfIdle(el.ctlOpacity, S.opacity.has(it.id) ? S.opacity.get(it.id) : 100);
+  for (const inp of [el.ctlX, el.ctlY, el.ctlW, el.ctlH, el.ctlRot]) inp.disabled = !!it.locked || isBackground(it);
+  if (attrs) {
+    if (document.activeElement !== el.ctlFont) el.ctlFont.value = ch.fontFamily in FAMILIES ? ch.fontFamily : '';
+    if (document.activeElement !== el.ctlStyle) styleOptions(ch.fontFamily, ch.fontStyle);
+    setIfIdle(el.ctlSize, ch.size != null ? +(+ch.size).toFixed(2) : '');
+    setIfIdle(el.ctlLeading, ch.leading && ch.leading.kind === 'points' ? +(+ch.leading.value).toFixed(2) : '');
+    setIfIdle(el.ctlTracking, ch.tracking != null ? Math.round(ch.tracking) : 0);
+    const al = (attrs.para || {}).align;
+    document.querySelectorAll('[data-palign]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.palign === al)));
+  }
+}
+
+function commitGeometry() {
+  const it = selected();
+  if (!it || it.locked || isBackground(it)) return;
+  const [x0, y0, x1, y1] = it.bounds;
+  const x = num(el.ctlX), y = num(el.ctlY), w = num(el.ctlW), h = num(el.ctlH);
+  if (x == null || y == null || w == null || h == null || w < 0 || h < 0) { updateControl(); return; }
+  const thin = (a, b) => b - a < 1;   // a drawn line has no height (or width) of its own
+  const to = [x * 72, y * 72, x * 72 + (thin(x0, x1) && w < 0.02 ? x1 - x0 : Math.max(0.5, w * 72)),
+              y * 72 + (thin(y0, y1) && h < 0.02 ? y1 - y0 : Math.max(0.5, h * 72))];
+  if (to.every((v, i) => Math.abs(v - it.bounds[i]) < 0.01)) return;
+  try {
+    run('transform.resize', { from: it.bounds, to, content: false, ids: [it.id] });
+    if (isImage(it)) run('object.fit', { mode: 'fillProportionally', ids: [it.id] });
+  } catch (e) { console.error(e); toast('That size could not be set.'); updateControl(); return; }
+  changed();
+}
+for (const inp of [el.ctlX, el.ctlY, el.ctlW, el.ctlH]) inp.addEventListener('change', commitGeometry);
+
+el.ctlRot.addEventListener('change', () => {
+  const it = selected(), a = num(el.ctlRot);
+  if (!it || a == null || it.locked) return;
+  if (tryRun('transform.set', { rotation: ((a % 360) + 360) % 360, ids: [it.id] }, 'That angle could not be set.') !== undefined) changed();
+});
+
+el.ctlFill.addEventListener('change', () => applySwatch(el.ctlFill.value, 'fill'));
+el.ctlStroke.addEventListener('change', () => applySwatch(el.ctlStroke.value, 'stroke'));
+
+function applySwatch(name, target) {
+  const it = selected();
+  if (!it) { toast('Select something first, then pick a swatch.'); return; }
+  try {
+    if (target === 'fill' && isText(it)) {
+      run('selection.set', { ids: [it.id] });
+      run('type.char', { attrs: { fill: name } });
+    } else if (target === 'fill') {
+      run('object.fill', { swatch: name, ids: [it.id] });
+    } else {
+      const p = { swatch: name, ids: [it.id] };
+      if (name !== '[None]' && !(it.stroke && it.stroke.weight > 0)) p.weight = 1;
+      run('object.stroke', p);
+    }
+  } catch (e) { console.error(e); toast('That swatch could not be applied.'); return; }
+  changed();
+}
+
+el.ctlWeight.addEventListener('change', () => {
+  const it = selected(), w = num(el.ctlWeight);
+  if (!it || w == null || w < 0) return;
+  const p = { weight: Math.min(w, 1000), ids: [it.id] };
+  if (w > 0 && (!it.stroke || it.stroke.swatch === '[None]')) p.swatch = '[Black]';
+  if (tryRun('object.stroke', p, 'That stroke could not be set.') !== undefined) changed();
+});
+
+el.ctlOpacity.addEventListener('change', () => {
+  const it = selected(), v = num(el.ctlOpacity);
+  if (!it || v == null) return;
+  const pc = Math.min(100, Math.max(0, v));
+  if (tryRun('object.opacity', { opacity: pc / 100, ids: [it.id] }, 'That opacity could not be set.') === undefined) return;
+  S.opacity.set(it.id, pc);
+  changed();
+});
+
+function applyChar(attrs) {
+  const it = selected();
+  if (!isText(it)) return;
+  try {
+    run('selection.set', { ids: [it.id] });
+    run('type.char', { attrs });
+  } catch (e) { console.error(e); toast('That type setting could not be applied.'); return; }
+  // Keep Simple mode's idea of the frame in step, for its toolbar.
+  const st = textStyle(it.id);
+  if (attrs.size) st.size = attrs.size;
+  if (attrs.fontFamily) {
+    const key = Object.keys(FONTS).find(k => FONTS[k].family === attrs.fontFamily);
+    if (key) st.font = key;
+  }
+  // The frame follows its words, as in Simple: bigger type must not push words out of print.
+  if (attrs.size || attrs.leading || attrs.fontFamily || attrs.fontStyle) {
+    if (attrs.size) st.size = attrs.size;
+    try { fitText(it.id); } catch (e) { console.error(e); }
+  }
+  changed();
+}
+el.ctlFont.addEventListener('change', () => {
+  const fam = el.ctlFont.value, styles = FAMILIES[fam] || ['Regular'];
+  const cur = el.ctlStyle.value;
+  applyChar({ fontFamily: fam, fontStyle: styles.includes(cur) ? cur : styles[0] });
+});
+el.ctlStyle.addEventListener('change', () => applyChar({ fontStyle: el.ctlStyle.value }));
+el.ctlSize.addEventListener('change', () => { const v = num(el.ctlSize); if (v != null && v >= 1 && v <= 1296) applyChar({ size: v }); });
+el.ctlLeading.addEventListener('change', () => {
+  const v = num(el.ctlLeading);
+  applyChar({ leading: v == null || v <= 0 ? { kind: 'auto' } : { kind: 'points', value: Math.min(v, 5000) } });
+});
+el.ctlTracking.addEventListener('change', () => { const v = num(el.ctlTracking); if (v != null) applyChar({ tracking: Math.max(-1000, Math.min(10000, v)) }); });
+document.querySelectorAll('[data-palign]').forEach(b => b.addEventListener('click', () => {
+  const it = selected();
+  if (!isText(it)) return;
+  try { run('selection.set', { ids: [it.id] }); run('type.para', { attrs: { align: b.dataset.palign } }); }
+  catch (e) { console.error(e); toast('That alignment could not be applied.'); return; }
+  if (b.dataset.palign in ALIGN_ICON) textStyle(it.id).align = b.dataset.palign;
+  changed();
+}));
+$('ctlEdit').addEventListener('click', openTextEditor);
+
+// ── the panels: Pages, Layers, Swatches, Align ──
+
+function updatePanels() {
+  updatePagesPanel();
+  updateLayersPanel();
+  updateSwatchPanel();
+}
+
+let thumbTimer = 0;
+function updatePagesPanel() {
+  const n = S.spec.pages;
+  if (el.pagesList.children.length !== n) {
+    el.pagesList.textContent = '';
+    for (let i = 0; i < n; i++) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      const img = document.createElement('img'); img.alt = '';
+      const cap = document.createElement('span'); cap.textContent = sideName(i);
+      b.append(img, cap);
+      b.addEventListener('click', () => { S.page = i; select(null); refresh(); });
+      el.pagesList.appendChild(b);
+    }
+  }
+  [...el.pagesList.children].forEach((b, i) => b.setAttribute('aria-current', String(i === S.page)));
+  // Thumbnails follow the design, a moment after it stops changing.
+  clearTimeout(thumbTimer);
+  thumbTimer = setTimeout(() => {
+    if (S.mode !== 'adv') return;
+    [...el.pagesList.children].forEach((b, i) => {
+      try {
+        const scale = Math.min(1, 104 / (S.spec.w + 2 * S.spec.bleed) * 2);
+        const p = S.d.renderPage(i, scale, true);
+        const c = document.createElement('canvas');
+        c.width = p.width; c.height = p.height;
+        c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(p.rgba), p.width, p.height), 0, 0);
+        p.free();
+        b.querySelector('img').src = c.toDataURL('image/png');
+      } catch (e) { console.error(e); }
+    });
+  }, 400);
+}
+
+function itemName(it) {
+  if (it.name) return it.name;
+  if (isBackground(it)) return 'Background';
+  if (isText(it)) { const st = S.stories.get(it.story); const t = st && st.preview ? st.preview.replace(/\s+/g, ' ').trim() : ''; return t ? '“' + t.slice(0, 40) + '”' : 'Empty text frame'; }
+  if (isImage(it)) return 'Photo';
+  const b = it.bounds;
+  if (b[3] - b[1] < 1 || b[2] - b[0] < 1) return 'Line';
+  return { '<rectangle>': 'Rectangle', '<ellipse>': 'Ellipse', '<polygon>': 'Polygon', '<group>': 'Group' }[it.kind] || it.kind.replace(/[<>]/g, '');
+}
+
+function updateLayersPanel() {
+  el.layersList.textContent = '';
+  const items = [...S.allItems].reverse();   // top of the stack first, as InDesign lists them
+  if (!items.length) { const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'Nothing on this side yet.'; el.layersList.appendChild(li); }
+  for (const it of items) {
+    const li = document.createElement('li');
+    li.setAttribute('aria-selected', String(it.id === S.sel));
+    li.classList.toggle('is-hidden', !!it.hidden);
+    const eye = document.createElement('button');
+    eye.type = 'button'; eye.className = 'lflag'; eye.textContent = it.hidden ? '◌' : '◉';
+    eye.setAttribute('aria-pressed', String(!it.hidden)); eye.setAttribute('aria-label', (it.hidden ? 'Show ' : 'Hide ') + itemName(it));
+    eye.title = it.hidden ? 'Hidden: it will not print. Click to show.' : 'Shown. Click to hide (hidden things do not print).';
+    eye.addEventListener('click', () => setFlag(it, { hidden: !it.hidden }));
+    const lock = document.createElement('button');
+    lock.type = 'button'; lock.className = 'lflag'; lock.textContent = it.locked ? '🔒' : '🔓';
+    lock.setAttribute('aria-pressed', String(!!it.locked)); lock.setAttribute('aria-label', (it.locked ? 'Unlock ' : 'Lock ') + itemName(it));
+    lock.title = it.locked ? 'Locked: it cannot be moved. Click to unlock.' : 'Click to lock it in place.';
+    lock.addEventListener('click', () => setFlag(it, { locked: !it.locked }));
+    const name = document.createElement('button');
+    name.type = 'button'; name.className = 'lname'; name.textContent = itemName(it);
+    name.addEventListener('click', () => { if (!it.hidden) select(it.id); });
+    li.append(eye, lock, name);
+    el.layersList.appendChild(li);
+  }
+}
+
+function setFlag(it, flags) {
+  if (tryRun('object.setFlags', { ids: [it.id], ...flags }, 'That could not be changed.') === undefined) return;
+  if (flags.hidden && S.sel === it.id) S.sel = null;
+  changed();
+}
+$('layerUp').addEventListener('click', () => { const it = selected(); if (it && tryRun('object.arrange', { to: 'forward', ids: [it.id] }) !== undefined) changed(); });
+$('layerDown').addEventListener('click', () => {
+  const it = selected();
+  if (!it || isBackground(it)) return;
+  const bg = background();
+  const order = S.items.map(i => i.id);
+  // Nothing goes behind the background colour.
+  if (bg && order.indexOf(it.id) === order.indexOf(bg.id) + 1) return;
+  if (tryRun('object.arrange', { to: 'backward', ids: [it.id] }) !== undefined) changed();
+});
+
+function updateSwatchPanel() {
+  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]')];
+  const key = names.join('|');
+  if (el.swatchList.dataset.key === key) return;
+  el.swatchList.dataset.key = key;
+  el.swatchList.textContent = '';
+  for (const n of names) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    const chip = document.createElement('span'); chip.className = 'sw-chip';
+    const css = swatchCss(n);
+    if (css) chip.style.background = css; else chip.classList.add('none');
+    const label = document.createElement('span'); label.textContent = n;
+    b.append(chip, label);
+    b.addEventListener('click', () => applySwatch(n, S.fsTarget));
+    li.appendChild(b);
+    el.swatchList.appendChild(li);
+  }
+}
+function setFsTarget(t) {
+  S.fsTarget = t;
+  el.fsFill.setAttribute('aria-pressed', String(t === 'fill'));
+  el.fsStroke.setAttribute('aria-pressed', String(t === 'stroke'));
+}
+el.fsFill.addEventListener('click', () => setFsTarget('fill'));
+el.fsStroke.addEventListener('click', () => setFsTarget('stroke'));
+el.swatchNew.addEventListener('submit', e => {
+  e.preventDefault();
+  const f = new FormData(el.swatchNew);
+  const v = k => Math.min(100, Math.max(0, Math.round(Number(f.get(k)) || 0)));
+  const c = { c: v('c'), m: v('m'), y: v('y'), k: v('k') };
+  const r = tryRun('swatch.create', { name: 'C=' + c.c + ' M=' + c.m + ' Y=' + c.y + ' K=' + c.k, color: c }, 'That swatch could not be made.');
+  if (r === undefined) return;
+  readDocument();
+  if (selected() && r && r.name) applySwatch(r.name, S.fsTarget); else changed();
+});
+
+document.querySelectorAll('[data-oalign]').forEach(b => b.addEventListener('click', () => {
+  const it = selected();
+  if (!it || it.locked || isBackground(it)) { if (!it) toast('Select something first, then align it.'); return; }
+  const { w, h, bleed, safety } = S.spec;
+  const box = { trim: [0, 0, w, h], safe: [safety, safety, w - safety, h - safety], bleed: [-bleed, -bleed, w + bleed, h + bleed] }[el.alignTo.value];
+  const [x0, y0, x1, y1] = it.bounds;
+  const dx = { left: box[0] - x0, right: box[2] - x1, hcenter: (box[0] + box[2]) / 2 - (x0 + x1) / 2 }[b.dataset.oalign] || 0;
+  const dy = { top: box[1] - y0, bottom: box[3] - y1, vcenter: (box[1] + box[3]) / 2 - (y0 + y1) / 2 }[b.dataset.oalign] || 0;
+  if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return;
+  if (tryRun('transform.move', { dx, dy, ids: [it.id] }, 'That could not be aligned.') !== undefined) changed();
+}));
+
+// ── Order options: the calculator's choices that change the design ──
+//
+// The calculator sends what may change (size, sides, quantity…) as a list of fields and owns
+// what they mean: this page draws them, sends a change back as pps-design:option, and shows the
+// price the calculator answers with. A new size or sides comes back as pps-design:spec, and the
+// design follows it (resizeDocument). Nothing here prices anything.
+
+function sanitizeOptions(list) {
+  const str = (v, n) => (typeof v === 'string' ? v : v == null ? '' : String(v)).slice(0, n);
+  const fin = v => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  return (Array.isArray(list) ? list : []).slice(0, 12).filter(o => o && typeof o === 'object' && /^[\w-]{1,32}$/.test(o.key || '')).map(o => {
+    const type = o.type === 'number' ? 'number' : 'select';
+    const out = { key: o.key, label: str(o.label || o.key, 40), type, help: str(o.help, 160) };
+    if (type === 'select') {
+      out.choices = (Array.isArray(o.choices) ? o.choices : []).slice(0, 200).map(c => ({ value: str(c && c.value, 60), label: str(c && (c.label ?? c.value), 80), group: str(c && c.group, 40) }));
+      out.value = str(o.value, 60);
+    } else {
+      out.value = fin(o.value) ?? 0; out.min = fin(o.min); out.max = fin(o.max); out.step = fin(o.step);
+    }
+    return out;
+  });
+}
+
+function setOptions(list) {
+  S.options = sanitizeOptions(list);
+  S.lastOption = null;
+  el.orderTab.hidden = !S.options.length;
+  if (!S.options.length) openOrder(false);
+  renderOrderFields();
+  renderOrderPrice();
+}
+
+function renderOrderFields() {
+  el.orderFields.textContent = '';
+  for (const o of S.options) {
+    const wrap = document.createElement('label');
+    wrap.className = 'op-field';
+    const cap = document.createElement('span'); cap.textContent = o.label;
+    let input;
+    if (o.type === 'select') {
+      input = document.createElement('select');
+      let group = null;
+      for (const c of o.choices) {
+        let parent = input;
+        if (c.group) {
+          if (!group || group.label !== c.group) { group = document.createElement('optgroup'); group.label = c.group; input.appendChild(group); }
+          parent = group;
+        } else group = null;
+        const op = document.createElement('option'); op.value = c.value; op.textContent = c.label;
+        parent.appendChild(op);
+      }
+      input.value = o.value;
+    } else {
+      input = document.createElement('input');
+      input.type = 'number'; input.inputMode = 'numeric';
+      if (o.min != null) input.min = o.min;
+      if (o.max != null) input.max = o.max;
+      if (o.step != null) input.step = o.step;
+      input.value = o.value;
+    }
+    input.dataset.key = o.key;
+    input.addEventListener('change', () => {
+      let v = input.value;
+      if (o.type === 'number') {
+        v = Number(v);
+        if (!Number.isFinite(v) || (o.min != null && v < o.min) || (o.max != null && v > o.max)) { input.value = o.value; toast(o.label + ' must be ' + (o.min != null ? 'at least ' + o.min : '') + (o.max != null ? ' and at most ' + o.max : '') + '.'); return; }
+      }
+      if (v === o.value) return;
+      S.lastOption = { key: o.key, prev: o.value };
+      o.value = v;
+      el.orderPrice.classList.add('busy');
+      if (S.embedded) post('pps-design:option', { key: o.key, value: v });
+      else demoOption(o.key, v);
+    });
+    wrap.append(cap, input);
+    if (o.help) { const h = document.createElement('span'); h.className = 'help'; h.textContent = o.help; wrap.appendChild(h); }
+    el.orderFields.appendChild(wrap);
+  }
+}
+
+function renderOrderPrice() {
+  el.orderPrice.classList.remove('busy');
+  el.orderPrice.textContent = '';
+  if (!S.price) {
+    el.orderPrice.hidden = !S.embedded;
+    if (S.embedded) el.orderPrice.textContent = 'Price shown on your order';
+    return;
+  }
+  el.orderPrice.hidden = false;
+  el.orderPrice.append('$' + S.price.total.toFixed(2));
+  const small = document.createElement('small');
+  const bits = [];
+  if (S.price.qty != null) bits.push(S.price.qty.toLocaleString() + ' pieces');
+  if (typeof S.price.turnaround === 'number' && Number.isFinite(S.price.turnaround)) bits.push(S.price.turnaround + ' business day' + (S.price.turnaround === 1 ? '' : 's') + ' to print');
+  small.textContent = bits.join(' · ');
+  el.orderPrice.appendChild(small);
+}
+
+function openOrder(open) {
+  el.orderPanel.classList.toggle('open', open);
+  el.orderTab.setAttribute('aria-expanded', String(open));
+  if (open) { const f = el.orderFields.querySelector('select, input'); if (f) f.focus(); }
+}
+el.orderTab.addEventListener('click', () => openOrder(!el.orderPanel.classList.contains('open')));
+$('orderClose').addEventListener('click', () => { openOrder(false); el.orderTab.focus(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && el.orderPanel.classList.contains('open')) openOrder(false); });
+
+// The calculator refused a change, or the customer backed out of losing a side: put the field back.
+function revertOption() {
+  const l = S.lastOption;
+  S.lastOption = null;
+  if (!l) return;
+  const o = S.options.find(x => x.key === l.key);
+  if (o) o.value = l.prev;
+  renderOrderFields();
+  el.orderPrice.classList.remove('busy');
+  if (S.embedded) post('pps-design:option', { key: l.key, value: l.prev });
+  else demoOption(l.key, l.prev, true);
+}
+
+// A new spec from the calculator while designing: a new size, or sides added or removed.
+function applySpec(spec) {
+  const bad = validSpec(spec);
+  if (bad) { console.warn('ignored a spec that is not usable (' + bad + ')'); revertOption(); return; }
+  const next = { w: spec.trimW, h: spec.trimH, bleed: spec.bleed ?? S.spec.bleed, safety: spec.safety ?? S.spec.safety, pages: spec.pages };
+  const cur = S.spec;
+  const same = (a, b) => Math.abs(a - b) < 0.01;
+  if (same(next.w, cur.w) && same(next.h, cur.h) && same(next.bleed, cur.bleed) && same(next.safety, cur.safety) && next.pages === cur.pages) {
+    S.lastOption = null; el.orderPrice.classList.remove('busy');
+    return;
+  }
+  if (next.pages < cur.pages) {
+    const lost = allPages().slice(next.pages).some(items => items.length);
+    if (lost && !confirm(sideName(next.pages) + ' has a design on it. Printing ' + (next.pages === 1 ? 'one side' : next.pages + ' pages') + ' removes it. Continue?')) { revertOption(); return; }
+  }
+  try { resizeDocument(next); }
+  catch (e) { console.error(e); toast('The design could not be changed to the new size.'); revertOption(); return; }
+  S.lastOption = null;
+}
+
+// Changes the document to the new trim, bleed and page count, and moves and scales what is on
+// it to match: each object keeps its place relative to the card and its shape (scaled evenly, by
+// the smaller of the two changes), and anything that covered the whole card (a background, a
+// photo filling the side) still covers the new one to the bleed. Text keeps its look at the new
+// scale. Undo stops here: the size belongs to the order.
+function resizeDocument(next) {
+  const old = S.spec;
+  const before = (run('document.inspect').spreads || []).map(sp => (sp.items || []).map(it => ({ id: it.id, b: it.bounds, kind: it.kind })));
+  run('layout.documentSetup', { width: next.w, height: next.h, pages: next.pages, bleed: next.bleed });
+  if (Math.abs(next.safety - old.safety) > 0.01) run('layout.marginsAndColumns', { margins: next.safety });
+  const sx = next.w / old.w, sy = next.h / old.h, k = Math.min(sx, sy);
+  before.slice(0, next.pages).forEach((items, page) => items.forEach(({ id, b, kind }) => {
+    const covers = b[0] <= 0.5 && b[1] <= 0.5 && b[2] >= old.w - 0.5 && b[3] >= old.h - 0.5;
+    let to;
+    if (covers) to = [-next.bleed, -next.bleed, next.w + next.bleed, next.h + next.bleed];
+    else {
+      const cx = (b[0] + b[2]) / 2 * sx, cy = (b[1] + b[3]) / 2 * sy, hw = (b[2] - b[0]) / 2 * k, hh = (b[3] - b[1]) / 2 * k;
+      to = [cx - hw, cy - hh, cx + hw, cy + hh];
+    }
+    if (!to.every((v, i) => Math.abs(v - b[i]) < 0.01)) run('transform.resize', { from: b, to, content: false, ids: [id] });
+    if (kind === '<image>') run('object.fit', { mode: 'fillProportionally', ids: [id] });
+    if (kind === '<text frame>' && S.style.has(id) && Math.abs(k - 1) > 0.01) {
+      const st = S.style.get(id);
+      st.size = Math.max(4, Math.round(st.size * k * 2) / 2);
+      run('selection.set', { ids: [id] });
+      run('type.char', { attrs: { size: st.size } });
+      fitText(id, page);
+    }
+  }));
+  S.spec = next;
+  el.productSize.textContent = inch(next.w) + ' × ' + inch(next.h) + ' in';
+  if (S.page >= next.pages) S.page = next.pages - 1;
+  S.sel = null;
+  S.dirty = true;
+  S.canRedo = false;
+  try { S.undoFloor = (run('document.history').undo || []).length; } catch { S.undoFloor = Infinity; }
+  buildSides();
+  el.pagesList.textContent = '';
+  layout();
+}
+
+// Standalone (the preview), the page plays the calculator's part with a few sizes, so the
+// panel can be tried. No prices: those only ever come from the calculator.
+const DEMO_SIZES = [[3.5, 2], [5, 3], [6, 4], [7, 5], [8.5, 5.5], [9, 6], [11, 8.5]];
+const DEMO = { size: '9x6', orientation: 'landscape', sides: '2', qty: 250 };
+function demoOptions() {
+  return [
+    { key: 'size', label: 'Size', type: 'select', value: DEMO.size, choices: DEMO_SIZES.map(([l, s]) => ({ value: l + 'x' + s, label: l + ' × ' + s + ' in' })) },
+    { key: 'orientation', label: 'Orientation', type: 'select', value: DEMO.orientation, choices: [{ value: 'landscape', label: 'Landscape (wide)' }, { value: 'portrait', label: 'Portrait (tall)' }] },
+    { key: 'sides', label: 'Sides printed', type: 'select', value: DEMO.sides, choices: [{ value: '2', label: 'Both sides' }, { value: '1', label: 'Front only' }] },
+    { key: 'qty', label: 'Quantity', type: 'number', value: DEMO.qty, min: 1, max: 99999, step: 1, help: 'In a real order the calculator updates the price.' },
+  ];
+}
+function demoSpec() {
+  const [l, s] = DEMO.size.split('x').map(Number);
+  const [w, h] = DEMO.orientation === 'portrait' ? [s, l] : [l, s];
+  return { trimW: w * 72, trimH: h * 72, bleed: 9, safety: 9, pages: Number(DEMO.sides), pageMultiple: 1 };
+}
+function demoOption(key, value, reverting) {
+  if (!(key in DEMO)) return;
+  DEMO[key] = value;
+  if (reverting) return;
+  setOptions(demoOptions());
+  applySpec(demoSpec());
+}
+
 // ── small things ─────────────────────────────────────────────
 
 let toastTimer = 0;
@@ -1095,6 +1834,9 @@ new ResizeObserver(() => layout()).observe(el.stage);
 
 (async () => {
   buildSwatches();
+  let saved = 'simple';
+  try { saved = localStorage.getItem(MODE_KEY) === 'adv' ? 'adv' : 'simple'; } catch { /* no storage: Simple */ }
+  setMode(saved);
   openDrawer('text');
   if (matchMedia('(max-width: 860px)').matches) closeDrawer();
   try {

@@ -21,8 +21,13 @@ prices, uploads or touches the cart.
 - `crates/`, `apps/`, `xtask/`: upstream DesignCraft, read-only (see below).
 - `crates/pps-*`: our Rust. The first is `crates/pps-bridge` (P1), the `wasm-bindgen` layer over
   upstream's public API.
-- `shell/`: our editor UI, `designer.html` + `designer.js` + `designer.css`, plain JS (P1, simple
-  mode). `shell/test/designer.e2e.mjs SITE_DIR` drives it in headless Chromium; CI runs it.
+- `shell/`: our editor UI, `designer.html` + `designer.js` + `designer.css`, plain JS. Two
+  workspaces over one document: Simple (Canva-like, the default) and Advanced (InDesign's print
+  workspace: tools, Control bar, Pages/Layers/Swatches/Align, zoom). Order options slide out
+  from the right. `shell/test/designer.e2e.mjs SITE_DIR` drives all of it in headless Chromium;
+  CI runs it.
+- `shell/HANDSHAKE.md`: the `pps-design:*` messages with the calculators, including the Order
+  options ones added after the brief's §6.
 - `shell/bundle.mjs`: packs a build into the store's release, `pps-designer-<sha>.html` (everything
   inline) plus `pps-designer-<sha>.wasm.gz`. Two files, because the store's deploy tool writes only
   into folders that already exist. CI runs the e2e on the bundle too; `wasm.yml`'s `release` job

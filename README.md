@@ -23,7 +23,16 @@ rules are in [CLAUDE.md](CLAUDE.md).
 
 ## Status
 
-**P1 started: simple mode.** `shell/designer.html` is the editor customers see, laid out like Canva:
+**P1: Simple and Advanced.** `shell/designer.html` is the editor customers see. Simple (the
+default) is laid out like Canva, below. Advanced, one click away, is laid out like InDesign's print
+workspace: a tools panel (selection, type, rectangle, ellipse, line, image frame), a Control bar of
+exact values (X, Y, W, H in inches, rotation, fill, stroke and weight, opacity, font, style, size,
+leading, tracking, alignment), and Pages, Layers (show/hide, lock, order), Swatches (CMYK, fill or
+stroke) and Align panels, with zoom. Both have **Order options**: a tab on the right slides out the
+order's size, orientation, sides and quantity as the calculator offers them; a change goes back to
+the calculator, which re-prices it, and the design follows a new size (`shell/HANDSHAKE.md`).
+
+Simple mode is laid out like Canva:
 four things to add (Text: heading, subheading, body; Photos: upload, or open an InDesign IDML file;
 Shapes: square, circle, triangle, line; Background colour), a toolbar above the design for whatever
 is selected (edit text, style, size, bold, alignment, colour, fill the side, layers, duplicate,
@@ -35,7 +44,7 @@ postcard and Print downloads the file.
 
 Preview: <https://pdevvle.github.io/priorityprintpad/> (simple mode) and
 <https://pdevvle.github.io/priorityprintpad/full/> (upstream's whole app, the P0 stand-in).
-P0 measurements are in `fixtures/p0/README.md`. Nothing is wired into the store yet.
+P0 measurements are in `fixtures/p0/README.md`. The postcard calculator opens the designer on staging; production waits on the owner.
 
 ## Upstream
 
