@@ -550,7 +550,8 @@ function background() { return S.items.find(isBackground) || null; }
 const OVERSET_MSG = 'Some words don\'t fit in their box and won\'t print. Make the box bigger or the words smaller.';
 const OFFCARD_MSG = 'Something is off the edge of the card and won\'t print. Drag it back on, or delete it.';
 const TEXT_EDGE_MSG = 'Some words run past the edge of the card and will be cut off. Move them in, or make them smaller.';
-const SEVERE = new Set([OVERSET_MSG, OFFCARD_MSG, TEXT_EDGE_MSG]);
+const FADED_TIGHT_MSG = 'Faded text with tight letter spacing loses part of its last letter when printed. Set the letter spacing to 0 or more, or the opacity to 100%.';
+const SEVERE = new Set([OVERSET_MSG, OFFCARD_MSG, TEXT_EDGE_MSG, FADED_TIGHT_MSG]);
 
 function problemsOf(it) {
   const out = [];
@@ -565,6 +566,13 @@ function problemsOf(it) {
       out.push('Some words are outside the green dashed line and could be cut off.');
     const st = S.stories.get(it.story);
     if (st && st.overset) out.push(OVERSET_MSG);
+    // The engine's PDF clips a see-through text frame's group to a box that misses the last
+    // letter's overhang when tracking is negative (up to 11 pt at 60 pt, −200): the canvas shows
+    // it whole, the press doesn't. Opacity is known for what was set in this session.
+    if (S.opacity.has(it.id) && S.opacity.get(it.id) < 100) {
+      try { if (textRuns(it.id).runs.some(r => r.tracking < 0)) out.push(FADED_TIGHT_MSG); }
+      catch (e) { console.error(e); }
+    }
     // Words on a fold crack and fade where the paper bends; on a perforation they are torn in two.
     const near = g => g.axis === 'v' ? x0 < g.at + safety && x1 > g.at - safety : y0 < g.at + safety && y1 > g.at - safety;
     if (linesOn('folds', S.page).some(near)) out.push('Some words are on or too close to a fold (the orange line). Keep them inside one panel.');
@@ -1081,6 +1089,9 @@ el.photoPick.addEventListener('change', async () => {
     catch (e) { console.error(e); }
   }
   const up = { name, bytes, dims: [bmp.width, bmp.height], url: URL.createObjectURL(file), bmp };
+  // A CMYK JPEG prints as its own inks (right), but the screen shows it far brighter than it
+  // prints: the customer is told once, so a blue that looks electric isn't a surprise on paper.
+  if (jpegIsCmyk(bytes)) setTimeout(() => toast('This photo is saved in print colours (CMYK). The screen shows it brighter than it will print; the printed colours will be those in the file.', 9000), 600);
   S.uploads.push(up);
   addUploadThumb(up);
   placePhoto(up, S.replaceInto);
@@ -1098,6 +1109,19 @@ async function encodePhoto(bmp) {
   c.getContext('2d').drawImage(bmp, 0, 0);
   const blob = await new Promise((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error('photo could not be encoded'))), 'image/jpeg', 0.95));
   return new Uint8Array(await blob.arrayBuffer());
+}
+
+// Whether a JPEG holds four colour channels (CMYK, from a print-ready export).
+function jpegIsCmyk(b) {
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return false;
+  let i = 2;
+  while (i + 9 < b.length && b[i] === 0xff) {
+    const marker = b[i + 1], len = (b[i + 2] << 8) | b[i + 3];
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return b[i + 9] === 4;
+    if (marker === 0xda || len < 2) return false;
+    i += 2 + len;
+  }
+  return false;
 }
 
 // EXIF Orientation (1–8) of a JPEG, or 0 when it has none.
@@ -1583,7 +1607,7 @@ function paintChip(chip, name) {
 }
 
 function swatchSelect(sel, current) {
-  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]')];
+  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]' && n !== '[Registration]')];
   if (current && !names.includes(current)) names.push(current);
   const key = names.join('|');
   if (sel.dataset.key !== key) {
@@ -1846,7 +1870,7 @@ $('layerDown').addEventListener('click', () => {
 });
 
 function updateSwatchPanel() {
-  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]')];
+  const names = ['[None]', ...S.swatches.filter(n => n !== '[None]' && n !== '[Registration]')];
   const key = names.join('|');
   if (el.swatchList.dataset.key === key) return;
   el.swatchList.dataset.key = key;
@@ -2132,11 +2156,12 @@ function textRuns(id) {
     run('text.select', { story: st.id, anchor: at, focus: at + n });
     const c = (run('type.selectionAttrs') || {}).chars || {};
     const lead = c.leading && c.leading.kind === 'points' ? c.leading.value : null;
-    const key = [c.size, lead, c.fontFamily, c.fontStyle].join('|');
+    const key = [c.size, lead, c.fontFamily, c.fontStyle, c.tracking].join('|');
     if (cur && cur.key === key) cur.b = at + n;
-    else { cur = { key, a: at, b: at + n, size: c.size, leading: lead, fontFamily: c.fontFamily, fontStyle: c.fontStyle }; runs.push(cur); }
+    else { cur = { key, a: at, b: at + n, size: c.size, leading: lead, fontFamily: c.fontFamily, fontStyle: c.fontStyle, tracking: c.tracking || 0 }; runs.push(cur); }
     at += n;
   }
+  run('selection.set', { ids: S.sel != null ? [S.sel] : [] });   // back to what the page has selected
   return { story: st && st.id, runs };
 }
 

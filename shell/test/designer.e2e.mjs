@@ -587,6 +587,38 @@ const errors = [];
   await ctx.close();
 }
 {
+  // Advanced: faded text with tight letter spacing (the PDF cuts its last letter), [Registration]
+  // (400% ink) and a CMYK photo (brighter on screen than in print).
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(BASE + 'designer.html?product=Postcard');
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  await page.click('[data-text="heading"]');
+  await page.fill('#textInput', 'Overlapping');
+  await page.click('#textDone');
+  await page.click('#modeAdv');
+  await page.waitForTimeout(400);
+  const b = await page.locator('#canvas').boundingBox();
+  const k = b.width / (648 + 18);
+  await page.mouse.click(b.x + (324 + 9) * k, b.y + (9 + 0.3 * 414 + 9) * k);
+  await page.fill('#ctlTracking', '-200'); await page.press('#ctlTracking', 'Enter');
+  await page.fill('#ctlOpacity', '50'); await page.press('#ctlOpacity', 'Enter');
+  await page.waitForTimeout(300);
+  await page.click('#print');
+  const stops = await page.locator('#checks li.stop').allTextContents();
+  ok('faded text with tight letter spacing is a problem in the print check (the PDF cuts its last letter)', stops.some(t => /Faded text with tight letter spacing/.test(t)), JSON.stringify(stops));
+  await page.click('#sheetCancel');
+  const lists = await page.evaluate(() => [...document.querySelectorAll('#swatchList button, #ctlFill option, #ctlStroke option')].map(e => e.textContent || e.value));
+  ok('[Registration] (400% ink) is not offered as a colour', lists.length > 0 && !lists.some(t => /Registration/.test(t)), lists.join(','));
+  await page.setInputFiles('#photoPick', path.join(HERE, 'fixtures', 'print-cmyk.jpg'));
+  await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 });
+  await page.waitForFunction(() => /CMYK/.test(document.getElementById('toast').textContent), null, { timeout: 5000 }).catch(() => {});
+  ok('a CMYK photo is said to look brighter on screen than in print', /print colours \(CMYK\)/.test(await page.textContent('#toast')), await page.textContent('#toast'));
+  await ctx.close();
+}
+{
   // A phone: the page doesn't scroll sideways into the closed Order options panel.
   const iphone = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' };
   const ctx = await browser.newContext(iphone);
