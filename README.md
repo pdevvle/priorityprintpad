@@ -48,7 +48,7 @@ P0 measurements are in `fixtures/p0/README.md`. The postcard calculator opens th
 
 ## Upstream
 
-Seeded from `storytold/designcraft` at `ca343e8` with its full history. Upstream's own docs are in
+Seeded from `storytold/designcraft` at `ca343e8` with its full history. Upstream's new work arrives as a weekly draft PR (`upstream-sync`), built and tested before anyone merges it. Upstream's own docs are in
 [AGENTS.md](AGENTS.md) and `docs/`; ignore their pointers to `plan/`, which is not in this repo.
 
 ## License and credits

@@ -1,0 +1,94 @@
+# Keeps DesignCraft (storytold/designcraft) easy to roll in: every Monday, and from Actions →
+# upstream-sync → Run workflow, it merges upstream's main into a new upstream-sync/<sha> branch
+# (.github/scripts/upstream-merge.sh answers this repo's standing conflicts), starts the full
+# wasm build and designer e2e on it, and opens a draft PR to main. Merging that PR stays a
+# deliberate step (CLAUDE.md: behind the gates, never on the day of a release); a merged PR's
+# main build then makes a new designer release like any other.
+#
+# A conflict it can't answer, or the ArtCraft mark coming back, fails this run and names the
+# files in its summary; the branch is then merged by hand.
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+env:
+  RUST_TOOLCHAIN: "1.97.0"
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Rust toolchain (for Cargo.lock)
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Merge upstream main
+        id: merge
+        run: |
+          git fetch -q https://github.com/storytold/designcraft.git main
+          sha=$(git rev-parse FETCH_HEAD)
+          branch="upstream-sync/${sha:0:7}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "### Upstream ${sha:0:7} already has a branch: \`$branch\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git checkout -q -b "$branch"
+          set +e
+          bash .github/scripts/upstream-merge.sh upstream/main > merge.log 2>&1
+          status=$?
+          set -e
+          cat merge.log
+          {
+            echo "### Upstream DesignCraft → \`$branch\`"
+            echo
+            echo '```'
+            cat merge.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Push the branch, start CI on it, open a draft PR
+        if: steps.merge.outputs.skip != 'true' && steps.merge.outputs.new != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+          NEW: ${{ steps.merge.outputs.new }}
+          UPSTREAM: ${{ steps.merge.outputs.upstream }}
+        run: |
+          git push -q origin "HEAD:refs/heads/$BRANCH"
+          # Pushes and PRs made with this token start no workflows, so start the build by hand.
+          gh workflow run wasm.yml --ref "$BRANCH"
+          body=$(printf '%s\n' \
+            "Upstream DesignCraft (storytold/designcraft) main at \`$UPSTREAM\`: $NEW new commit(s), merged by \`.github/scripts/upstream-merge.sh\`." \
+            "" \
+            "The **wasm** run on this branch builds the designer and runs its e2e; merge only when it is green, after the brief's §7 gates and the store's suite, and never on the day of a release (CLAUDE.md)." \
+            "" \
+            "Upstream commits:" \
+            '```' \
+            "$(git log --oneline "origin/main..HEAD" --no-merges | head -60)" \
+            '```')
+          if ! gh pr create --draft --base main --head "$BRANCH" --title "Upstream DesignCraft ${UPSTREAM:0:7} ($NEW commits)" --body "$body"; then
+            echo "::warning::Could not open the PR (Settings → Actions → General → 'Allow GitHub Actions to create and approve pull requests' may be off). The branch $BRANCH is pushed; open the PR from it."
+            echo "Branch \`$BRANCH\` is pushed; the PR could not be opened automatically." >> "$GITHUB_STEP_SUMMARY"
+          fi
