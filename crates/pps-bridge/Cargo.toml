@@ -1,0 +1,21 @@
+[package]
+name = "pps-bridge"
+description = "PPS Designer: the JavaScript bridge to the DesignCraft engine (wasm-bindgen)"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+designcraft-engine = { workspace = true }
+designcraft-render = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+wasm-bindgen = "0.2"

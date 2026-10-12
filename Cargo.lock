@@ -3400,6 +3400,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pps-bridge"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "designcraft-engine",
+ "designcraft-render",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -50,6 +50,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-egui", Class::Layer(6)),
     ("mcp", Class::Layer(6)),
     ("testkit", Class::Testkit),
+    // PPS Designer: the JavaScript bridge, beside the UI crates at L6
+    ("pps-bridge", Class::Layer(6)),
     // L7 apps and tooling
     ("designcraft", Class::Exempt),
     ("cli", Class::Exempt),
