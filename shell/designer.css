@@ -132,6 +132,8 @@ svg { width: 22px; height: 22px; flex: none; }
 .legend .bleed { border-top: 2px dotted #e04444; }
 .legend .trim { border-top: 1.5px solid #222; }
 .legend .safe { border-top: 2px dashed #1f9d55; }
+.legend .fold { border-top: 2px solid #ea7a0c; }
+.legend .perf { border-top: 2px dashed #8b3fd9; }
 .legend [data-tip]::after { top: auto; bottom: calc(100% + 8px); }
 .warnings { display: flex; flex-direction: column; gap: 6px; }
 .warnings div { background: var(--warn-bg); color: var(--warn-ink); border-radius: var(--radius); padding: 8px 12px; font-size: 14px; }

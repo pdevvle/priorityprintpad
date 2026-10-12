@@ -189,8 +189,31 @@ function validSpec(spec) {
   if (spec.safety != null && (!n(spec.safety) || spec.safety < 0 || spec.safety > 144)) return 'safety';
   if (!Number.isInteger(spec.pages) || spec.pages < 1 || spec.pages > 64) return 'pages';
   if (spec.pageMultiple != null && (!Number.isInteger(spec.pageMultiple) || spec.pageMultiple < 1 || spec.pages % spec.pageMultiple)) return 'page multiple';
+  for (const k of ['folds', 'perfs']) {
+    const list = spec[k];
+    if (list == null) continue;
+    if (!Array.isArray(list) || list.length > 16) return k;
+    for (const g of list) {
+      if (!g || (g.axis !== 'v' && g.axis !== 'h') || !n(g.at) || !Number.isInteger(g.page) || g.page < 0 || g.page >= spec.pages) return k;
+      if (g.at <= 0 || g.at >= (g.axis === 'v' ? spec.trimW : spec.trimH)) return k;
+    }
+  }
+  if (spec.panelLabels != null && (!Array.isArray(spec.panelLabels) || spec.panelLabels.length > spec.pages)) return 'panel labels';
   return null;
 }
+
+// The order's fold and perforation lines, and the names of the panels between the folds: guides
+// on the design that never print (the press folds and perforates; the calculator places them).
+// Lines are {page, axis: 'v' (at x) | 'h' (at y), at} in points from the trim's top-left.
+function specGuides(sp) {
+  const lines = k => (Array.isArray(sp[k]) ? sp[k] : []).map(g => ({ page: g.page, axis: g.axis, at: g.at }));
+  const labels = Array.isArray(sp.panelLabels)
+    ? sp.panelLabels.map(l => (Array.isArray(l) ? l.slice(0, 8).map(t => String(t).slice(0, 30)) : []))
+    : [];
+  return { folds: lines('folds'), perfs: lines('perfs'), panelLabels: labels };
+}
+const sameGuides = (a, b) => JSON.stringify([a.folds, a.perfs, a.panelLabels]) === JSON.stringify([b.folds, b.perfs, b.panelLabels]);
+const linesOn = (k, page) => (S.spec[k] || []).filter(g => g.page === page);
 
 function resetLocalState() {
   S.style.clear(); S.colour.clear(); S.imagePx.clear(); S.swatchNames.clear(); S.sel = null; S.page = 0;
@@ -200,7 +223,7 @@ function startJob(job) {
   const bad = validSpec(job && job.spec);
   if (bad) throw new Error('the job spec is not usable (' + bad + ')');
   const sp = job.spec;
-  S.spec = { w: sp.trimW, h: sp.trimH, bleed: sp.bleed ?? 9, safety: sp.safety ?? 9, pages: sp.pages };
+  S.spec = { w: sp.trimW, h: sp.trimH, bleed: sp.bleed ?? 9, safety: sp.safety ?? 9, pages: sp.pages, ...specGuides(sp) };
   resetLocalState();
   let opened = false;
   if (typeof job.design === 'string' && job.design) {
@@ -214,6 +237,7 @@ function startJob(job) {
   const inches = v => +(v / 72).toFixed(3);
   el.productSize.textContent = inches(S.spec.w) + ' × ' + inches(S.spec.h) + ' in';
   buildSides();
+  updateLegend();
   S.dirty = opened;
   S.undoFloor = 0;
   if (Array.isArray(job.options)) setOptions(job.options);
@@ -273,6 +297,8 @@ function showPrice(m) {
 
 function sideName(i) {
   if (S.spec.pages === 1) return 'Your design';
+  // A folded piece prints outside and inside, not front and back.
+  if (S.spec.pages === 2 && (S.spec.folds || []).length) return i === 0 ? 'Outside' : 'Inside';
   if (S.spec.pages === 2) return i === 0 ? 'Front' : 'Back';
   return 'Page ' + (i + 1);
 }
@@ -372,6 +398,7 @@ function draw() {
   ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.strokeRect(...safeRect);
   ctx.lineWidth = 1.75; ctx.setLineDash([6, 4]); ctx.strokeStyle = '#13843f'; ctx.strokeRect(...safeRect);
   ctx.setLineDash([]); ctx.lineWidth = 1.5;
+  drawGuides(ctx);
 
   for (const it of S.items) if (problemsOf(it).length) {
     const r = itemRect(it);
@@ -416,6 +443,40 @@ function draw() {
   }
 }
 
+// Folds (solid orange) and perforations (dashed purple) across the card, on a white underlay so
+// they read on any colour, and the panel names between the folds.
+function drawGuides(ctx) {
+  const { w, h } = S.spec;
+  const line = (g, colour, dash) => {
+    ctx.beginPath();
+    if (g.axis === 'v') { ctx.moveTo(px(g.at), px(-S.spec.bleed)); ctx.lineTo(px(g.at), px(h + S.spec.bleed)); }
+    else { ctx.moveTo(px(-S.spec.bleed), px(g.at)); ctx.lineTo(px(w + S.spec.bleed), px(g.at)); }
+    ctx.setLineDash([]); ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
+    ctx.setLineDash(dash); ctx.lineWidth = 1.75; ctx.strokeStyle = colour; ctx.stroke();
+  };
+  const folds = linesOn('folds', S.page), perfs = linesOn('perfs', S.page);
+  for (const g of folds) line(g, '#ea7a0c', []);
+  for (const g of perfs) line(g, '#8b3fd9', [3, 3]);
+  ctx.setLineDash([]);
+  // Panel names, centred near the top of each panel (or the left, for folds that run across).
+  const names = (S.spec.panelLabels || [])[S.page] || [];
+  if (folds.length && names.length === folds.length + 1) {
+    const axis = folds[0].axis;
+    const cuts = [0, ...folds.map(g => g.at).sort((a, b) => a - b), axis === 'v' ? w : h];
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    names.forEach((name, i) => {
+      const mid = (cuts[i] + cuts[i + 1]) / 2;
+      const [x, y] = axis === 'v' ? [px(mid), px(S.spec.safety) + 10] : [px(S.spec.safety) + 40, px(mid)];
+      const tw = ctx.measureText(name).width + 10;
+      ctx.fillStyle = 'rgba(234,122,12,.92)';
+      ctx.fillRect(x - tw / 2, y - 8, tw, 16);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(name, x, y);
+    });
+  }
+}
+
 function corners(r) {
   return [[r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h]];
 }
@@ -446,6 +507,10 @@ function problemsOf(it) {
       out.push('Some words are outside the green dashed line and could be cut off.');
     const st = S.stories.get(it.story);
     if (st && st.overset) out.push('Some words don\'t fit in their box. Make the box bigger or the words smaller.');
+    // Words on a fold crack and fade where the paper bends; on a perforation they are torn in two.
+    const near = g => g.axis === 'v' ? x0 < g.at + safety && x1 > g.at - safety : y0 < g.at + safety && y1 > g.at - safety;
+    if (linesOn('folds', S.page).some(near)) out.push('Some words are on or too close to a fold (the orange line). Keep them inside one panel.');
+    if (linesOn('perfs', S.page).some(near)) out.push('Some words are on or too close to a perforation (the purple dashed line), where the card tears.');
   } else if (!isBackground(it)) {
     const short = past => past < -0.5 && past > -bleed + 0.5;
     if (short(x0) || short(y0) || short(w - x1) || short(h - y1))
@@ -461,6 +526,11 @@ function problemsOf(it) {
 }
 
 // ── chrome ───────────────────────────────────────────────────
+
+function updateLegend() {
+  $('legendFold').hidden = !(S.spec.folds || []).length;
+  $('legendPerf').hidden = !(S.spec.perfs || []).length;
+}
 
 function updateChrome() {
   el.undo.disabled = !S.canUndo;
@@ -1146,6 +1216,7 @@ function doPrint() {
       const anyPhoto = allPages().flat().some(isImage);
       const manifest = {
         pages: S.spec.pages, trimPt: [S.spec.w, S.spec.h], bleedPt: S.spec.bleed,
+        folds: S.spec.folds.length ? S.spec.folds : undefined, perfs: S.spec.perfs.length ? S.spec.perfs : undefined,
         outputIntent: OUTPUT_INTENT, outputIntentPlaceholder: true, rgbImages: anyPhoto,
       };
       if (S.embedded) {
@@ -1729,10 +1800,12 @@ function revertOption() {
 function applySpec(spec) {
   const bad = validSpec(spec);
   if (bad) { console.warn('ignored a spec that is not usable (' + bad + ')'); revertOption(); return; }
-  const next = { w: spec.trimW, h: spec.trimH, bleed: spec.bleed ?? S.spec.bleed, safety: spec.safety ?? S.spec.safety, pages: spec.pages };
+  const next = { w: spec.trimW, h: spec.trimH, bleed: spec.bleed ?? S.spec.bleed, safety: spec.safety ?? S.spec.safety, pages: spec.pages, ...specGuides(spec) };
   const cur = S.spec;
   const same = (a, b) => Math.abs(a - b) < 0.01;
   if (same(next.w, cur.w) && same(next.h, cur.h) && same(next.bleed, cur.bleed) && same(next.safety, cur.safety) && next.pages === cur.pages) {
+    // Same card: only the folds or perforations moved. The guides follow; the design stays.
+    if (!sameGuides(next, cur)) { S.spec = next; buildSides(); el.pagesList.textContent = ''; refresh(); updateLegend(); }
     S.lastOption = null; el.orderPrice.classList.remove('busy');
     return;
   }
@@ -1775,6 +1848,7 @@ function resizeDocument(next) {
     }
   }));
   S.spec = next;
+  updateLegend();
   el.productSize.textContent = inch(next.w) + ' × ' + inch(next.h) + ' in';
   if (S.page >= next.pages) S.page = next.pages - 1;
   S.sel = null;
@@ -1789,19 +1863,52 @@ function resizeDocument(next) {
 // Standalone (the preview), the page plays the calculator's part with a few sizes, so the
 // panel can be tried. No prices: those only ever come from the calculator.
 const DEMO_SIZES = [[3.5, 2], [5, 3], [6, 4], [7, 5], [8.5, 5.5], [9, 6], [11, 8.5]];
-const DEMO = { size: '9x6', orientation: 'landscape', sides: '2', qty: 250 };
+const DEMO = { size: '9x6', orientation: 'landscape', sides: '2', fold: 'flat', perf: '0', qty: 250 };
+// Panels across the long edge, as the postcard calculator lays them out (a trifold's inside flap
+// is 1/32 in narrower so it tucks in); the names are the calculator's.
+const DEMO_FOLDS = {
+  flat: { widths: [0], names: [[], []] },
+  bifold: { widths: [0, 0], names: [['Back', 'Front'], ['Inside Front', 'Inside Back']] },
+  trifold: { widths: [-1, 0, 1], names: [['Inside Flap', 'Back', 'Front'], ['Inside Left', 'Inside Center', 'Inside Right']] },
+};
 function demoOptions() {
   return [
     { key: 'size', label: 'Size', type: 'select', value: DEMO.size, choices: DEMO_SIZES.map(([l, s]) => ({ value: l + 'x' + s, label: l + ' × ' + s + ' in' })) },
     { key: 'orientation', label: 'Orientation', type: 'select', value: DEMO.orientation, choices: [{ value: 'landscape', label: 'Landscape (wide)' }, { value: 'portrait', label: 'Portrait (tall)' }] },
     { key: 'sides', label: 'Sides printed', type: 'select', value: DEMO.sides, choices: [{ value: '2', label: 'Both sides' }, { value: '1', label: 'Front only' }] },
+    { key: 'fold', label: 'Folding', type: 'select', value: DEMO.fold, choices: [{ value: 'flat', label: 'Flat (no folds)' }, { value: 'bifold', label: 'Bifold (2 panels)' }, { value: 'trifold', label: 'Trifold (3 panels)' }] },
+    { key: 'perf', label: 'Perforation', type: 'select', value: DEMO.perf, choices: [{ value: '0', label: 'No perforation' }, { value: '1', label: '1 perforation line' }] },
     { key: 'qty', label: 'Quantity', type: 'number', value: DEMO.qty, min: 1, max: 99999, step: 1, help: 'In a real order the calculator updates the price.' },
   ];
 }
 function demoSpec() {
   const [l, s] = DEMO.size.split('x').map(Number);
-  const [w, h] = DEMO.orientation === 'portrait' ? [s, l] : [l, s];
-  return { trimW: w * 72, trimH: h * 72, bleed: 9, safety: 9, pages: Number(DEMO.sides), pageMultiple: 1 };
+  const portrait = DEMO.orientation === 'portrait';
+  const [w, h] = portrait ? [s, l] : [l, s];
+  const pages = Number(DEMO.sides);
+  const fold = DEMO_FOLDS[DEMO.fold] || DEMO_FOLDS.flat;
+  // Positions along the long edge, in inches: fold lines between the panels, a perforation 2 in
+  // from the right-hand end (a tear-off coupon).
+  const n = fold.widths.length, at = [];
+  for (let i = 0, x = 0; i < n - 1; i++) { x += l / n + fold.widths[i] / 32; at.push(x); }
+  const perfAt = DEMO.perf === '1' ? [l - 2] : [];
+  return { trimW: w * 72, trimH: h * 72, bleed: 9, safety: 9, pages, pageMultiple: 1,
+    ...guideLines(l, s, portrait, pages, at, perfAt), panelLabels: n > 1 ? fold.names.slice(0, pages) : [] };
+}
+
+// Lines across a sheet held landscape at `atLong` inches along its long edge, as the page shows
+// them: turned upright for a portrait card, and mirrored on the back (turned over left to right,
+// what was on the left of the front is on the right of the back). Used by the demo; the
+// postcard calculator does the same in calc-postcard.html.
+function guideLines(l, s, portrait, pages, foldAt, perfAt) {
+  const W = (portrait ? s : l) * 72;
+  const place = (a, page) => {
+    let g = portrait ? { axis: 'h', at: a * 72 } : { axis: 'v', at: a * 72 };
+    if (page === 1 && g.axis === 'v') g = { axis: 'v', at: W - g.at };
+    return { page, ...g };
+  };
+  const all = list => [...Array(pages).keys()].flatMap(page => list.map(a => place(a, page)));
+  return { folds: all(foldAt), perfs: all(perfAt) };
 }
 function demoOption(key, value, reverting) {
   if (!(key in DEMO)) return;

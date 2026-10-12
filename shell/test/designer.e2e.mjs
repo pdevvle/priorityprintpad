@@ -45,13 +45,17 @@ const HOST = `<!doctype html><meta charset="utf-8"><body>
     if (m.type === 'pps-design:option') {
       window.optionsGot = (window.optionsGot || []).concat([[m.key, m.value]]);
       if (m.key === 'size' && m.value === '7x5') {
-        w.postMessage({ type: 'pps-design:spec', v: 1, spec: { trimW: 504, trimH: 360, bleed: 9, safety: 9, pages: 2, pageMultiple: 2, folds: [], bindEdge: null, spine: 0 } }, location.origin);
+        w.postMessage({ type: 'pps-design:spec', v: 1, spec: { trimW: 504, trimH: 360, bleed: 9, safety: 9, pages: 2, pageMultiple: 2,
+          folds: [{ page: 0, axis: 'v', at: 252 }, { page: 1, axis: 'v', at: 252 }], panelLabels: [['Back', 'Front'], ['Inside Front', 'Inside Back']],
+          bindEdge: null, spine: 0 } }, location.origin);
         w.postMessage({ type: 'pps-design:options', v: 1, options: options('7x5') }, location.origin);
         w.postMessage({ type: 'pps-design:price', v: 1, total: 112.25, qty: 500, turnaround: 4 }, location.origin);
       }
     }
     if (m.type === 'pps-design:ready') {
-      w.postMessage({ type: 'pps-design:job', v: 1, spec: { trimW: 432, trimH: 288, bleed: 9, safety: 9, pages: 2, pageMultiple: 2, folds: [], bindEdge: null, spine: 0 }, options: options('6x4') }, location.origin);
+      w.postMessage({ type: 'pps-design:job', v: 1, spec: { trimW: 432, trimH: 288, bleed: 9, safety: 9, pages: 2, pageMultiple: 2,
+        folds: [{ page: 0, axis: 'v', at: 216 }, { page: 1, axis: 'v', at: 216 }], panelLabels: [['Back', 'Front'], ['Inside Front', 'Inside Back']],
+        bindEdge: null, spine: 0 }, options: options('6x4') }, location.origin);
       w.postMessage({ type: 'pps-design:price', v: 1, total: 89.5, qty: 500, turnaround: 'standard' }, location.origin);
       // A message with the wrong version must be ignored.
       w.postMessage({ type: 'pps-design:price', v: 99, total: 1 }, location.origin);
@@ -261,7 +265,7 @@ const errors = [];
   ok('Order options is a tab on the right', await page.isVisible('#orderTab'));
   await page.click('#orderTab');
   await page.waitForTimeout(300);
-  ok('…that slides out size, orientation, sides and quantity', (await page.locator('#orderFields label > span:first-child').allTextContents()).join(',') === 'Size,Orientation,Sides printed,Quantity');
+  ok('…that slides out size, orientation, sides, folding, perforation and quantity', (await page.locator('#orderFields label > span:first-child').allTextContents()).join(',') === 'Size,Orientation,Sides printed,Folding,Perforation,Quantity');
   await page.selectOption('#orderFields select[data-key="size"]', '6x4');
   await page.waitForTimeout(400);
   ok('a new size changes the design to it', (await page.textContent('#productSize')) === '6 × 4 in');
@@ -346,6 +350,38 @@ const errors = [];
   await ctx.close();
 }
 
+// ── folds and perforations: guides on the design, never in the print file ──
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, acceptDownloads: true });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(BASE + 'designer.html?product=Brochure&w=11&h=8.5');
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  await page.click('#orderTab');
+  await page.selectOption('#orderFields select[data-key="fold"]', 'trifold');
+  await page.selectOption('#orderFields select[data-key="perf"]', '1');
+  await page.click('#orderClose');
+  ok('a folded job is designed as Outside and Inside', (await page.locator('#sides button').allTextContents()).join(',') === 'Outside,Inside');
+  ok('…with the fold and perforation in the legend', await page.isVisible('#legendFold') && await page.isVisible('#legendPerf'));
+  await page.click('[data-text="heading"]');
+  await page.fill('#textInput', 'A heading across the fold that is long');
+  await page.click('#textDone');
+  await page.waitForTimeout(300);
+  const w = await page.locator('#warnings div').allTextContents();
+  ok('words across a fold or a perforation are flagged', w.some(t => /fold/.test(t)) && w.some(t => /perforation/.test(t)), JSON.stringify(w));
+  await page.click('#print');
+  const lines = await page.locator('#checks li').allTextContents();
+  ok('…and named in the print check, by side', lines.some(l => /^Outside: .*fold/.test(l)), JSON.stringify(lines));
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#sheetGo')]);
+  const pdf = await readFile(await dl.path());
+  const mb = pdf.toString('latin1').match(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/);
+  ok('the print file is the flat sheet, 11 × 8.5 in plus bleed, two sides', mb && Math.round(+mb[1]) === 810 && Math.round(+mb[2]) === 630 && (pdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length === 2, mb ? mb[0] : '');
+  const strokes = contentStreams(pdf).join('\n').match(/(?:^|\s)(?:S|s|B\*?|b\*?)(?=\s|$)/g) || [];
+  ok('fold and perforation guides are not printed (no lines in the page content)', strokes.length === 0, strokes.length + ' found');
+  await ctx.close();
+}
+
 // ── embedded in a calculator (handshake, brief §6) ──
 {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
@@ -359,6 +395,7 @@ const errors = [];
   await frame.locator('#print:not([disabled])').waitFor({ timeout: 20000 });
   ok('the price chip shows what the host sent (display only)', (await frame.locator('#price').textContent()) === '$89.50 · 500 pcs');
   ok('the job sets the size (6 × 4 in)', (await frame.locator('#productSize').textContent()) === '6 × 4 in');
+  ok('the job\'s folds make it Outside and Inside', (await frame.locator('#sides button').allTextContents()).join(',') === 'Outside,Inside');
   ok('no demo notice when embedded', !(await frame.locator('#demo').isVisible()));
   await frame.locator('[data-text="heading"]').click();
   await frame.locator('#textDone').click();
@@ -378,6 +415,7 @@ const errors = [];
   ok('posts pps-design:print with a PDF', p.pdfHead === '%PDF-' && p.pdfBytes > 1000, p.pdfBytes + ' bytes');
   ok('…with the design and a thumbnail per side', p.design > 0 && p.thumbs === 2);
   ok('…and a manifest that flags the placeholder output intent', p.manifest && p.manifest.outputIntentPlaceholder === true && p.manifest.pages === 2);
+  ok('…with the host\'s latest folds in the manifest', p.manifest && Array.isArray(p.manifest.folds) && p.manifest.folds.length === 2 && p.manifest.folds[0].at === 252, JSON.stringify(p.manifest && p.manifest.folds));
   ok('…at the size the host asked for last (7 × 5 in)', p.manifest && p.manifest.trimPt && p.manifest.trimPt[0] === 504 && p.manifest.trimPt[1] === 360, JSON.stringify(p.manifest && p.manifest.trimPt));
   await frame.locator('#back').click();
   await page.waitForFunction(() => window.got.some(m => m.type === 'pps-design:close'), null, { timeout: 10000 });
