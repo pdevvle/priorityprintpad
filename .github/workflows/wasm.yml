@@ -116,7 +116,11 @@ jobs:
           mv dist/designer/pps_bridge_bg.opt.wasm dist/designer/pps_bridge_bg.wasm
           cp shell/designer.html shell/designer.css shell/designer.js dist/designer/
           cp shell/designer.html dist/designer/index.html
-          printf '{"wasmBytes": %s, "sha": "%s"}\n' "$(stat -c %s dist/designer/pps_bridge_bg.wasm)" "$BUILD_SHA" \
+          # The engine ships gzipped (the page unpacks it): 9 MB fits the store's 12 MB
+          # pull-deploy cap and downloads fast from servers that don't compress .wasm.
+          gzip -9 -n -k dist/designer/pps_bridge_bg.wasm
+          printf '{"wasm": "pps_bridge_bg.wasm.gz", "wasmBytes": %s, "wasmFileBytes": %s, "sha": "%s"}\n' \
+            "$(stat -c %s dist/designer/pps_bridge_bg.wasm)" "$(stat -c %s dist/designer/pps_bridge_bg.wasm.gz)" "$BUILD_SHA" \
             > dist/designer/designer-manifest.json
 
       # The customer-facing editor, driven in a real browser: add, drag, colour, photo, undo,
@@ -140,6 +144,7 @@ jobs:
         run: |
           mkdir -p dist/site
           cp -r dist/designer/. dist/site/
+          rm dist/site/pps_bridge_bg.wasm      # the page loads the .gz
           cp -r dist/web dist/site/full
 
       - uses: actions/upload-artifact@v4
@@ -158,6 +163,53 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist/site
+
+  # A designer release for the store: every main build is committed under
+  # releases/<sha>/ on the designer-releases branch, so the store pulls it with
+  # pps_plugin_download_url from raw.githubusercontent.com, pinned by commit (its
+  # deploy tool takes https URLs of up to 12 MB; the gzipped engine is ~9 MB).
+  release:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: web
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: designer-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: designer-site-${{ env.BUILD_SHA }}
+          path: site
+      - name: Commit the release to designer-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git init -q rel && cd rel
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin designer-releases; then git checkout -q -b designer-releases FETCH_HEAD
+          else git checkout -q --orphan designer-releases; fi
+          dest="releases/${BUILD_SHA}"
+          mkdir -p "$dest"
+          for f in designer.html designer.js designer.css pps_bridge.js pps_bridge_bg.wasm.gz designer-manifest.json; do
+            cp "../site/$f" "$dest/$f"
+          done
+          git add "$dest"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Designer release ${BUILD_SHA}"
+          git push -q origin HEAD:designer-releases
+          rel=$(git rev-parse HEAD)
+          {
+            echo "### Designer release \`${BUILD_SHA:0:7}\`"
+            echo
+            echo "Pull each file into \`wp-content/plugins/pps-calculators/designer/${BUILD_SHA}/\` from:"
+            echo
+            for f in designer.html designer.js designer.css pps_bridge.js pps_bridge_bg.wasm.gz designer-manifest.json; do
+              echo "- https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${rel}/${dest}/$f"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Publish main's build to GitHub Pages (Settings → Pages → Source: GitHub Actions). Runs on
   # every push to main, and from Actions → wasm → Run workflow on main to republish by hand.

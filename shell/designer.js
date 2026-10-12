@@ -95,13 +95,22 @@ function changed() {
 
 // ── loading ───────────────────────────────────────────────────
 
+// The engine ships gzip-compressed (pps_bridge_bg.wasm.gz, named in designer-manifest.json):
+// 9 MB instead of 23, which fits the store's 12 MB pull-deploy cap and downloads quickly from a
+// server that doesn't compress .wasm itself. The page unpacks it with DecompressionStream. If a
+// server does decompress it on the way (Content-Encoding: gzip), the bytes already start with the
+// wasm magic number and are used as they are.
 async function loadEngine() {
-  let total = 0;
+  let file = 'pps_bridge_bg.wasm', total = 0;
   try {
     const m = await fetch('designer-manifest.json', { cache: 'no-store' });
-    if (m.ok) total = (await m.json()).wasmBytes || 0;
+    if (m.ok) {
+      const man = await m.json();
+      if (typeof man.wasm === 'string' && /^[\w.-]+$/.test(man.wasm)) file = man.wasm;
+      total = man.wasmFileBytes || man.wasmBytes || 0;
+    }
   } catch { /* the bar falls back to the byte count */ }
-  const res = await fetch('pps_bridge_bg.wasm');
+  const res = await fetch(file);
   if (!res.ok || !res.body) throw new Error('could not download the designer (' + res.status + ')');
   const reader = res.body.getReader();
   const parts = [];
@@ -114,9 +123,15 @@ async function loadEngine() {
     el.loadMsg.textContent = 'Getting the designer ready… ' + (got / 1048576).toFixed(1) + ' MB';
     if (total) el.loadBar.style.width = Math.min(100, (got / total) * 100).toFixed(1) + '%';
   }
-  const bytes = new Uint8Array(got);
+  let bytes = new Uint8Array(got);
   let off = 0;
   for (const p of parts) { bytes.set(p, off); off += p.length; }
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    if (typeof DecompressionStream !== 'function') throw new Error('this browser is too old to open the designer');
+    el.loadMsg.textContent = 'Unpacking…';
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  }
   el.loadMsg.textContent = 'Almost there…';
   await init({ module_or_path: bytes });
   S.d = new Designer();
@@ -288,9 +303,11 @@ function draw() {
   ctx.lineWidth = 1.5;
   ctx.setLineDash([2, 3]); ctx.strokeStyle = '#e04444'; ctx.strokeRect(1, 1, cw - 2, ch - 2);
   ctx.setLineDash([]); ctx.strokeStyle = '#222'; ctx.strokeRect(px(0), px(0), w * S.k, h * S.k);
-  ctx.setLineDash([6, 4]); ctx.strokeStyle = '#1f9d55';
-  ctx.strokeRect(px(safety), px(safety), (w - 2 * safety) * S.k, (h - 2 * safety) * S.k);
-  ctx.setLineDash([]);
+  // The safe line on a white underlay, so it reads on any background colour (green on teal didn't).
+  const safeRect = [px(safety), px(safety), (w - 2 * safety) * S.k, (h - 2 * safety) * S.k];
+  ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.strokeRect(...safeRect);
+  ctx.lineWidth = 1.75; ctx.setLineDash([6, 4]); ctx.strokeStyle = '#13843f'; ctx.strokeRect(...safeRect);
+  ctx.setLineDash([]); ctx.lineWidth = 1.5;
 
   for (const it of S.items) if (problemsOf(it).length) {
     const r = itemRect(it);
