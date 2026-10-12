@@ -23,6 +23,10 @@ prices, uploads or touches the cart.
   upstream's public API.
 - `shell/`: our editor UI, `designer.html` + `designer.js` + `designer.css`, plain JS (P1, simple
   mode). `shell/test/designer.e2e.mjs SITE_DIR` drives it in headless Chromium; CI runs it.
+- `shell/bundle.mjs`: packs a build into the store's release, `pps-designer-<sha>.html` (everything
+  inline) plus `pps-designer-<sha>.wasm.gz`. Two files, because the store's deploy tool writes only
+  into folders that already exist. CI runs the e2e on the bundle too; `wasm.yml`'s `release` job
+  commits it to `designer-releases`.
 - `.github/workflows/wasm.yml`: the P0 wasm build and payload measurement.
 - Upstream's FreeBSD and Windows ARM64 workflows are removed: they package desktop builds we don't
   ship, and FreeBSD needs a larger runner than this account has. Keep them deleted when merging
