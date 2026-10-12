@@ -30,8 +30,28 @@ source window, and `v === 1`, and ignores anything else.
 **Spec.** It is in points, with the trim's top-left at 0,0:
 
 ```
-{ trimW, trimH, bleed?, safety?, pages, pageMultiple?, folds?, bindEdge?, spine? }
+{ trimW, trimH, bleed?, safety?, pages, pageMultiple?, folds?, perfs?, panelLabels?, bindEdge?, spine? }
 ```
+
+**Folds and perforations.** `folds` and `perfs` are lists of lines, at most 16 each:
+
+```
+{ page, axis: 'v' | 'h', at }
+```
+
+- `page` is 0-based.
+- `axis: 'v'` is a vertical line at x = `at`; `axis: 'h'` is a horizontal line at y = `at`.
+- `at` is in points from the trim's top-left.
+- Lines are given per page, as each page is seen. A back page turned over left to right has its
+  vertical lines mirrored. The calculator works out the positions, including a trifold's narrower
+  inside flap.
+
+`panelLabels[page]` names the panels between that page's folds, in order (left to right, or top to
+bottom).
+
+The designer draws these as guides that never print, and flags words on or within the safety
+margin of a fold or perforation. A folded two-page job is shown as Outside and Inside. The
+designer includes the lines in its print `manifest`.
 
 **Options.** At most 12. A `select` option needs `choices`; a `number` option takes `min`, `max`
 and `step`:
