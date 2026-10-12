@@ -14,7 +14,9 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 mkdir -p "$OUT"
 
 wasm=$(find "$SITE" -maxdepth 1 -name '*_bg.wasm' | head -n1)
-js=$(find "$SITE" -maxdepth 1 -name '*.js' | head -n1)
+# The glue is named after the module: foo_bg.wasm → foo.js (the site may hold other scripts).
+js=${wasm%_bg.wasm}.js
+[ -f "$js" ] || js=""
 [ -n "$wasm" ] || { echo "error: no *_bg.wasm in $SITE" >&2; exit 1; }
 [ -n "$js" ] || { echo "error: no .js glue in $SITE" >&2; exit 1; }
 

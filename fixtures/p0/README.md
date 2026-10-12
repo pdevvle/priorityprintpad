@@ -42,7 +42,10 @@ Checked against the brief's §7 output contract by reading the PDF back:
 - MediaBox 666 × 450 pt (trim + 2 × bleed), TrimBox 648 × 432 pt, BleedBox declared.
 - Fonts embedded and subset with `ABCDEF+` tags (Source Sans 3 Bold and Regular, Source Serif 4
   Semibold; all OFL, listed in `ASSETS.md`).
-- Shapes in CMYK only (`k`/`K` operators), no RGB operators, no transparency groups. CMYK
+- Shapes in CMYK only (`k`/`K` operators), no RGB operators, no transparency groups.
+- No outlines: new shapes get a 1 pt black stroke by default, which the first version of this
+  file carried on the band, the panel and the rule. The script now sets their stroke to none, and
+  the rebuilt PDF has no stroke operators. Use this version for the press test (0.6). CMYK
   percentages are stored as 8-bit fractions: 95% is written as 0.949.
 - The photo is DeviceRGB, allowed for the digital press (§7).
 - The red corner marker lands top-left: the image is not flipped or rotated.

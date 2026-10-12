@@ -1,0 +1,17 @@
+# IDML fixtures for shell/test/designer.e2e.mjs: a two-sided 9 x 6 in card (opens into the demo
+# postcard order) and a one-page 6 x 4 in card (refused: wrong size for that order). Built with:
+#
+#   designcraft-cli script shell/test/fixtures/cards.txt     (from the repo root)
+
+# 0-3: 9 x 6 in, two pages, a headline and a coloured back
+file.new {"width":648,"height":432,"pages":2,"facingPages":false,"bleed":9,"margins":9,"title":"IDML card"}
+frame.create {"spread":0,"rect":[72,150,576,230],"content":"text","text":"Opened from IDML"}
+frame.create {"spread":1,"rect":[-9,-9,657,441],"content":"unassigned"}
+object.color {"color":{"c":0,"m":60,"y":100,"k":0},"ids":["$2.id"]}
+# 4-5: no outline, then the IDML
+object.stroke {"swatch":"[None]","ids":["$2.id"]}
+file.exportIdml {"path":"shell/test/fixtures/card-9x6.idml"}
+# 6-8: 6 x 4 in, one page
+file.new {"width":432,"height":288,"pages":1,"facingPages":false,"bleed":9,"margins":9,"title":"Small card"}
+frame.create {"spread":0,"rect":[36,100,396,160],"content":"text","text":"Wrong size"}
+file.exportIdml {"path":"shell/test/fixtures/card-6x4.idml"}

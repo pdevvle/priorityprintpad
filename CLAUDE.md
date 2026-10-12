@@ -21,7 +21,8 @@ prices, uploads or touches the cart.
 - `crates/`, `apps/`, `xtask/`: upstream DesignCraft, read-only (see below).
 - `crates/pps-*`: our Rust. The first is `crates/pps-bridge` (P1), the `wasm-bindgen` layer over
   upstream's public API.
-- `shell/`: our editor UI, `designer.html` + plain JS (P1).
+- `shell/`: our editor UI, `designer.html` + `designer.js` + `designer.css`, plain JS (P1, simple
+  mode). `shell/test/designer.e2e.mjs SITE_DIR` drives it in headless Chromium; CI runs it.
 - `.github/workflows/wasm.yml`: the P0 wasm build and payload measurement.
 - Upstream's FreeBSD and Windows ARM64 workflows are removed: they package desktop builds we don't
   ship, and FreeBSD needs a larger runner than this account has. Keep them deleted when merging

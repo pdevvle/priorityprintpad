@@ -1,6 +1,8 @@
-# P0 task 0.1: build upstream's web app (apps/designcraft-web) for wasm32 with upstream's own
-# settings, measure its payload (0.2) and upload a ready-to-serve static site. Pushes to main also
-# publish that site to GitHub Pages (0.3), the preview the owner and the phone tests open.
+# Builds two web apps and publishes them together:
+#   /       the PPS Designer simple mode: shell/ (designer.html) over crates/pps-bridge
+#   /full/  upstream's whole app (apps/designcraft-web), the P0 stand-in (task 0.1)
+# Measures both payloads (0.2) and uploads the site. Pushes to main also publish it to GitHub
+# Pages (0.3), the preview the owner and the phone tests open.
 #
 # Upstream builds the web app with Trunk (apps/designcraft-web/Trunk.toml and index.html):
 # `cargo build --release`, wasm-bindgen `--target web` with weak refs, then `wasm-opt -Oz`. These
@@ -96,13 +98,54 @@ jobs:
           sed "s#^ *<link data-trunk rel=\"rust\".*#  ${script}#" apps/designcraft-web/index.html > dist/web/index.html
           ! grep -q 'data-trunk' dist/web/index.html
 
-      - name: Measure payload (0.2)
-        run: bash .github/scripts/wasm-payload.sh dist/web dist/payload
+      # The bridge's own checks, natively: tests for hostile input and the clippy no-panic rules.
+      - name: pps-bridge tests and clippy
+        run: |
+          cargo test --locked -p pps-bridge
+          cargo clippy --locked -p pps-bridge --all-targets -- -D warnings
+
+      - name: Designer (simple mode)
+        run: |
+          cargo build --locked --release --target wasm32-unknown-unknown -p pps-bridge
+          wasm-bindgen target/wasm32-unknown-unknown/release/pps_bridge.wasm \
+            --out-dir dist/designer --target web --weak-refs --no-typescript
+          wasm-opt -Oz \
+            --enable-bulk-memory --enable-multivalue --enable-mutable-globals \
+            --enable-nontrapping-float-to-int --enable-reference-types --enable-sign-ext \
+            dist/designer/pps_bridge_bg.wasm -o dist/designer/pps_bridge_bg.opt.wasm
+          mv dist/designer/pps_bridge_bg.opt.wasm dist/designer/pps_bridge_bg.wasm
+          cp shell/designer.html shell/designer.css shell/designer.js dist/designer/
+          cp shell/designer.html dist/designer/index.html
+          printf '{"wasmBytes": %s, "sha": "%s"}\n' "$(stat -c %s dist/designer/pps_bridge_bg.wasm)" "$BUILD_SHA" \
+            > dist/designer/designer-manifest.json
+
+      # The customer-facing editor, driven in a real browser: add, drag, colour, photo, undo,
+      # print (standalone download and the §6 handshake with a host page).
+      - name: Designer end-to-end test
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw" && cd "$RUNNER_TEMP/pw"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1.56.1
+          npx playwright install --with-deps chromium
+          cd "$GITHUB_WORKSPACE"
+          PPS_PLAYWRIGHT="$RUNNER_TEMP/pw/node_modules/playwright" PPS_SHOT=dist/payload-shot.png \
+            node shell/test/designer.e2e.mjs dist/designer
+
+      - name: Measure payloads (0.2)
+        run: |
+          bash .github/scripts/wasm-payload.sh dist/designer dist/payload/designer
+          bash .github/scripts/wasm-payload.sh dist/web dist/payload/full
+
+      - name: Assemble the site (designer at the root, the full app under full/)
+        run: |
+          mkdir -p dist/site
+          cp -r dist/designer/. dist/site/
+          cp -r dist/web dist/site/full
 
       - uses: actions/upload-artifact@v4
         with:
-          name: designcraft-web-${{ env.BUILD_SHA }}
-          path: dist/web
+          name: designer-site-${{ env.BUILD_SHA }}
+          path: dist/site
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -114,7 +157,7 @@ jobs:
       - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist/web
+          path: dist/site
 
   # Publish main's build to GitHub Pages (Settings → Pages → Source: GitHub Actions). Runs on
   # every push to main, and from Actions → wasm → Run workflow on main to republish by hand.

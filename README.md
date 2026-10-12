@@ -23,8 +23,19 @@ rules are in [CLAUDE.md](CLAUDE.md).
 
 ## Status
 
-**P0: measuring.** `wasm.yml` builds upstream's web app (`apps/designcraft-web`) as a stand-in to
-measure payload size and load time before any editor UI is written. Nothing ships yet.
+**P1 started: simple mode.** `shell/designer.html` is the editor customers see, laid out like Canva:
+four things to add (Text: heading, subheading, body; Photos: upload, or open an InDesign IDML file;
+Shapes: square, circle, triangle, line; Background colour), a toolbar above the design for whatever
+is selected (edit text, style, size, bold, alignment, colour, fill the side, layers, duplicate,
+delete) with plain-language tooltips, text boxes that grow to fit their words, undo, warnings for
+words near the cut, white edges and blurry photos, and Print, which hands the calculator a PDF/X-4
+print file through the brief's §6 handshake. InDesign `.indd` files are closed and can't be read;
+they are recognised and the customer is told to save as IDML. Opened on its own it runs a demo
+postcard and Print downloads the file.
+
+Preview: <https://pdevvle.github.io/priorityprintpad/> (simple mode) and
+<https://pdevvle.github.io/priorityprintpad/full/> (upstream's whole app, the P0 stand-in).
+P0 measurements are in `fixtures/p0/README.md`. Nothing is wired into the store yet.
 
 ## Upstream
 
