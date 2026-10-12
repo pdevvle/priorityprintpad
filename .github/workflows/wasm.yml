@@ -229,7 +229,7 @@ jobs:
               echo "- https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${rel}/${dest}/$f"
             done
             echo
-            echo "Then PPS Config → Artwork → Online Designer URL:"
+            echo "Then PPS Config → Production tab, Artwork section → Online Designer URL:"
             echo "\`/wp-content/plugins/pps-calculators/pps-designer-${BUILD_SHA}.html\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
