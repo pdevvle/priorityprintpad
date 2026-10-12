@@ -29,6 +29,20 @@ const MAX_SCALE: f64 = 8.0;
 const MAX_PIXELS: f64 = 40_000_000.0;
 /// The largest image the bridge will place (bytes). Phone photos are 3–12 MB.
 const MAX_IMAGE_BYTES: usize = 40 * 1024 * 1024;
+/// The largest design file the bridge will open (bytes).
+const MAX_FILE_BYTES: usize = 100 * 1024 * 1024;
+/// The first 16 bytes of every InDesign document (.indd, .indt), a published file signature.
+const INDD_SIGNATURE: [u8; 16] = [0x06, 0x06, 0xED, 0xF5, 0xD8, 0x1D, 0x46, 0xE5, 0xBD, 0x31, 0xEF, 0xE7, 0xFE, 0x74, 0xB7, 0x1D];
+/// The error `open_file` gives for an InDesign document, so the page can explain what to do.
+pub const INDD_UNSUPPORTED: &str = "indd-unsupported";
+
+/// Whether `bytes` (named `name`) is an InDesign document rather than an IDML package.
+pub fn is_indd(bytes: &[u8], name: &str) -> bool {
+    bytes.get(..16) == Some(&INDD_SIGNATURE[..]) || {
+        let n = name.to_ascii_lowercase();
+        n.ends_with(".indd") || n.ends_with(".indt")
+    }
+}
 
 /// A rendered page: straight (not premultiplied) RGBA, ready for canvas `ImageData`.
 #[derive(Debug)]
@@ -130,6 +144,24 @@ impl Bridge {
         self.session.execute("file.openBytes", &params).map_err(|e| format!("openDesign: {e}"))
     }
 
+    /// Open a design file (IDML, or a saved `.designcraft` design) as a new document, which
+    /// becomes the current one. InDesign's own `.indd` is a closed binary format the engine
+    /// cannot read; it is refused with [`INDD_UNSUPPORTED`] so the page can say how to export IDML.
+    pub fn open_file(&mut self, bytes: &[u8], name: &str) -> Result<Value, String> {
+        if bytes.is_empty() {
+            return Err("openFile: the file is empty".into());
+        }
+        if bytes.len() > MAX_FILE_BYTES {
+            return Err(format!("openFile: {} MB is larger than the {} MB allowed", bytes.len() / 1_048_576, MAX_FILE_BYTES / 1_048_576));
+        }
+        if is_indd(bytes, name) {
+            return Err(INDD_UNSUPPORTED.into());
+        }
+        let name: String = name.chars().filter(|c| !c.is_control()).take(120).collect();
+        let params = json!({"name": if name.is_empty() { "design.idml".to_string() } else { name }, "base64": B64.encode(bytes)});
+        self.session.execute("file.openBytes", &params).map_err(|e| format!("openFile: {e}"))
+    }
+
     /// Place image bytes (JPEG, PNG, …) into graphic frame `frame`. Encoding happens here rather
     /// than in JavaScript, where a phone photo would be copied through a giant string.
     pub fn place_image(&mut self, bytes: &[u8], name: &str, frame: u64) -> Result<Value, String> {
@@ -213,6 +245,12 @@ impl Designer {
         self.inner.open_design(design).map(|v| v.to_string()).map_err(js)
     }
 
+    /// Open an IDML package or saved design; an InDesign `.indd` throws `indd-unsupported`.
+    #[wasm_bindgen(js_name = openFile)]
+    pub fn open_file(&mut self, bytes: &[u8], name: &str) -> Result<String, JsError> {
+        self.inner.open_file(bytes, name).map(|v| v.to_string()).map_err(js)
+    }
+
     #[wasm_bindgen(js_name = placeImage)]
     pub fn place_image(&mut self, bytes: &[u8], name: &str, frame: u32) -> Result<String, JsError> {
         self.inner.place_image(bytes, name, u64::from(frame)).map(|v| v.to_string()).map_err(js)
@@ -283,6 +321,23 @@ mod tests {
         let ins = c.execute("document.inspect", "{}").unwrap();
         assert_eq!(ins["pageCount"], 2);
         assert!(ins["stories"].to_string().contains("Back side"));
+    }
+
+    #[test]
+    fn opens_idml_and_refuses_indd_with_a_clear_code() {
+        let mut b = postcard();
+        b.execute("frame.create", r#"{"spread":0,"rect":[36,36,300,90],"content":"text","text":"From IDML"}"#).unwrap();
+        // The engine writes IDML; open what it wrote, as a customer's file would arrive.
+        let idml = B64.decode(b.execute("file.exportIdml", "{}").unwrap()["base64"].as_str().unwrap()).unwrap();
+        let mut c = Bridge::new();
+        c.open_file(&idml, "card.idml").unwrap();
+        assert!(c.execute("document.inspect", "{}").unwrap()["stories"].to_string().contains("From IDML"));
+        let mut indd = INDD_SIGNATURE.to_vec();
+        indd.extend_from_slice(&[0; 64]);
+        assert_eq!(b.open_file(&indd, "brochure.bin").unwrap_err(), INDD_UNSUPPORTED, "by signature");
+        assert_eq!(b.open_file(b"anything", "Brochure.INDD").unwrap_err(), INDD_UNSUPPORTED, "by name");
+        assert!(b.open_file(&[], "x.idml").is_err());
+        assert!(b.open_file(b"not a zip", "x.idml").is_err());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 // End-to-end test of the simple-mode designer in headless Chromium.
 //
 // Serves a built site directory (the wasm.yml `designer-site-<sha>` artefact, or dist/designer)
-// and drives the real page: add text and type into it, add a shape and drag it, colour it, add a
-// photo and fill the side with it, undo and redo, then print. Standalone, Print must download a
+// and drives the real page: add a heading and type into it, add a shape and drag it, colour it,
+// add a photo and fill the side with it, colour the background, undo and redo, open IDML files
+// (one that fits the order, one that doesn't, and an InDesign .indd), then print. Standalone, Print must download a
 // PDF; embedded in a same-origin host page, it must speak the brief's §6 handshake (ready → job →
 // price → print) and send a PDF, the design and thumbnails back.
 //
@@ -106,16 +107,29 @@ const errors = [];
   const k = await page.evaluate(() => parseFloat(getComputedStyle(document.getElementById('canvas')).width) / (648 + 18));
   const at = (x, y) => [box.x + (x + 9) * k, box.y + (y + 9) * k];
 
-  await page.click('[data-add="text"]');
-  ok('adding text selects it and opens the text panel', await page.isVisible('#panelText'));
+  ok('four things to add, Canva-style', (await page.locator('.railbtn').allTextContents()).map(t => t.trim()).join(',') === 'Text,Photos,Shapes,Background');
+  ok('the main buttons explain themselves (tooltips)', (await page.locator('.railbtn[data-tip], #print[data-tip], #undo[data-tip]').count()) === 6);
+  ok('an empty design says where to start', await page.isVisible('#emptyHint'));
+  await page.click('[data-text="heading"]');
+  ok('adding a heading selects it and opens the text toolbar', await page.isVisible('#ctxText'));
+  ok('…and opens its words for typing, on the design', await page.isVisible('#textEditor'));
   await page.fill('#textInput', 'Grand opening Saturday');
-  await page.waitForTimeout(600);
+  await page.click('#textDone');
+  await page.waitForTimeout(300);
+  ok('the start hint goes once something is added', !(await page.isVisible('#emptyHint')));
+  const sizeBefore = Number(await page.textContent('#sizeOut'));
+  await page.click('#sizeUp');
+  await page.waitForTimeout(150);
+  ok('the + button makes the text bigger', Number(await page.textContent('#sizeOut')) > sizeBefore);
   const story = await page.evaluate(() => [...document.querySelectorAll('#warnings div')].map(d => d.textContent));
   ok('typing updates the design without warnings', story.length === 0, JSON.stringify(story));
 
-  await page.click('[data-add="rect"]');
-  ok('adding a box shows the colour panel', await page.isVisible('#panelColour'));
+  await page.click('[data-cat="shapes"]');
+  await page.click('[data-shape="square"]');
+  ok('adding a square shows the colour button', await page.isVisible('#colourBtn'));
+  await page.click('#colourBtn');
   await page.click('#swatches button[title="Red"]');
+  ok('picking a colour closes the colour picker', !(await page.isVisible('#colourPop')));
   // Drag the box 100 pt right from its centre (the box sits in the middle of the card).
   const [cx, cy] = at(324, 216);
   await page.mouse.move(cx, cy); await page.mouse.down();
@@ -123,12 +137,17 @@ const errors = [];
   await page.mouse.up();
   await page.waitForTimeout(300);
 
+  await page.click('#duplicate');
+  await page.waitForTimeout(200);
+  await page.click('#remove');
+  await page.waitForTimeout(200);
+
+  await page.click('[data-cat="photos"]');
   await page.setInputFiles('#photoPick', path.join(HERE, '..', '..', 'fixtures', 'p0', 'photo.jpg'));
-  await page.waitForSelector('#panelPhoto:not([hidden])', { timeout: 20000 });
-  ok('adding a photo selects it and offers "Fill the whole side"', await page.isVisible('#fillSide'));
+  await page.waitForSelector('#ctxPhoto:not([hidden])', { timeout: 20000 });
+  ok('adding a photo selects it and offers "Fill the side"', await page.isVisible('#fillSide'));
+  ok('…and keeps it in Photos to add again', (await page.locator('#uploads button').count()) === 1);
   await page.click('#fillSide');
-  await page.waitForTimeout(300);
-  await page.click('#toBack');
   await page.waitForTimeout(300);
 
   const undoEnabled = await page.isEnabled('#undo');
@@ -138,8 +157,8 @@ const errors = [];
   await page.click('#redo'); await page.waitForTimeout(200);
 
   await page.click('#sides button:nth-child(2)');
-  await page.click('[data-add="background"]');
-  await page.click('#swatches button[title="Yellow"]');
+  await page.click('[data-cat="background"]');
+  await page.click('#bgSwatches button[title="Yellow"]');
   await page.waitForTimeout(300);
   await page.click('#sides button:nth-child(1)');
 
@@ -162,6 +181,34 @@ const errors = [];
   await ctx.close();
 }
 
+// ── opening InDesign files ──
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(BASE + 'designer.html');
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  await page.click('[data-cat="photos"]');
+  const toastText = async () => { await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 }); const t = await page.textContent('#toast'); await page.evaluate(() => { document.getElementById('toast').hidden = true; }); return t; };
+
+  const indd = Buffer.concat([Buffer.from([0x06, 0x06, 0xED, 0xF5, 0xD8, 0x1D, 0x46, 0xE5, 0xBD, 0x31, 0xEF, 0xE7, 0xFE, 0x74, 0xB7, 0x1D]), Buffer.alloc(4096)]);
+  await page.setInputFiles('#filePick', { name: 'brochure.indd', mimeType: 'application/octet-stream', buffer: indd });
+  const t1 = await toastText();
+  ok('an InDesign .indd is recognised and explained (save as IDML)', /InDesign Markup \(IDML\)/.test(t1), t1.slice(0, 80));
+
+  await page.setInputFiles('#filePick', path.join(HERE, 'fixtures', 'card-6x4.idml'));
+  const t2 = await toastText();
+  ok('an IDML of the wrong size is refused, with both sizes named', /6 × 4 in/.test(t2) && /9 × 6 in/.test(t2), t2.slice(0, 90));
+  ok('…and the design that was open stays', await page.isVisible('#emptyHint'));
+
+  await page.setInputFiles('#filePick', path.join(HERE, 'fixtures', 'card-9x6.idml'));
+  const t3 = await toastText();
+  ok('an IDML that fits the order opens', /^Opened card-9x6\.idml/.test(t3), t3.slice(0, 60));
+  ok('…and its content is on the design', !(await page.isVisible('#emptyHint')));
+  await ctx.close();
+}
+
 // ── embedded in a calculator (handshake, brief §6) ──
 {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
@@ -176,7 +223,8 @@ const errors = [];
   ok('the price chip shows what the host sent (display only)', (await frame.locator('#price').textContent()) === '$89.50 · 500 pcs');
   ok('the job sets the size (6 × 4 in)', (await frame.locator('#productSize').textContent()) === '6 × 4 in');
   ok('no demo notice when embedded', !(await frame.locator('#demo').isVisible()));
-  await frame.locator('[data-add="text"]').click();
+  await frame.locator('[data-text="heading"]').click();
+  await frame.locator('#textDone').click();
   await frame.locator('#print').click();
   await frame.locator('#sheetGo').click();
   await page.waitForFunction(() => window.got.some(m => m.type === 'pps-design:print'), null, { timeout: 60000 });

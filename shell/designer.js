@@ -1,9 +1,11 @@
 // PPS Designer, simple mode: the editor customers see.
 //
-// One page, plain JS, no framework. Everything the customer does is an engine command through
-// the bridge (crates/pps-bridge), so undo, the preview and the print file all come from the same
-// document. The calculator that opens this page owns the product spec, the price and the cart;
-// this page only designs and hands back a print file (brief §6, CLAUDE.md).
+// One page, plain JS, no framework, laid out the way people know from Canva: a rail of four
+// things to add (Text, Photos, Shapes, Background), a drawer for the one that's open, a toolbar
+// above the design for whatever is selected, and the design itself. Everything the customer does
+// is an engine command through the bridge (crates/pps-bridge), so undo, the preview and the print
+// file all come from the same document. The calculator that opens this page owns the product spec,
+// the price and the cart; this page only designs and hands back a print file (brief §6, CLAUDE.md).
 //
 // Units: the engine works in points (72 per inch) with the trim's top-left corner at 0,0.
 // The canvas shows the page plus its bleed.
@@ -13,6 +15,7 @@ import init, { Designer } from './pps_bridge.js';
 const PROTOCOL = 1;
 const OUTPUT_INTENT = 'DesignCraft Generic CMYK (SWOP-like)';
 const LOW_PPI = 150;
+const INDD_UNSUPPORTED = 'indd-unsupported';
 
 // Print colours: CMYK for the press, an sRGB stand-in for the button.
 const COLOURS = [
@@ -34,16 +37,19 @@ const FONTS = {
   classic: { family: 'Source Serif 4', regular: 'Regular', bold: 'Bold' },
   modern: { family: 'Inter', regular: 'Regular', bold: 'SemiBold' },
 };
+const ALIGNS = ['left', 'center', 'right'];
+const ALIGN_ICON = { left: 'M4 6h16M4 12h10M4 18h16', center: 'M4 6h16M7 12h10M4 18h16', right: 'M4 6h16M10 12h10M4 18h16' };
 
 const $ = id => document.getElementById(id);
 const el = {
   app: $('app'), canvas: $('canvas'), stage: $('stage'), sides: $('sides'), warnings: $('warnings'),
   undo: $('undo'), redo: $('redo'), print: $('print'), back: $('back'), price: $('price'), demo: $('demo'),
-  productName: $('productName'), productSize: $('productSize'), photoPick: $('photoPick'),
-  panelEmpty: $('panelEmpty'), panelText: $('panelText'), panelPhoto: $('panelPhoto'),
-  panelColour: $('panelColour'), panelCommon: $('panelCommon'), swatches: $('swatches'),
-  textInput: $('textInput'), fontPick: $('fontPick'), boldBtn: $('boldBtn'), sizeRange: $('sizeRange'),
-  sizeOut: $('sizeOut'), sheet: $('sheet'), checks: $('checks'), loader: $('loader'), loadMsg: $('loadMsg'),
+  productName: $('productName'), productSize: $('productSize'), photoPick: $('photoPick'), filePick: $('filePick'),
+  drawer: $('drawer'), uploads: $('uploads'), swatches: $('swatches'), bgSwatches: $('bgSwatches'),
+  ctxHint: $('ctxHint'), ctxText: $('ctxText'), ctxColour: $('ctxColour'), ctxPhoto: $('ctxPhoto'), ctxCommon: $('ctxCommon'),
+  colourPop: $('colourPop'), colourDot: $('colourDot'), fontPick: $('fontPick'), boldBtn: $('boldBtn'),
+  sizeOut: $('sizeOut'), alignIcon: $('alignIcon'), textEditor: $('textEditor'), textInput: $('textInput'),
+  emptyHint: $('emptyHint'), sheet: $('sheet'), checks: $('checks'), loader: $('loader'), loadMsg: $('loadMsg'),
   loadBar: $('loadBar'), toast: $('toast'),
 };
 
@@ -59,11 +65,14 @@ const S = {
   pageCanvas: document.createElement('canvas'),
   canUndo: false, canRedo: false,
   style: new Map(),      // text frame id → {font, bold, size, align, colour}
+  colour: new Map(),     // shape id → colour name, for the toolbar's dot
   imagePx: new Map(),    // image frame id → [width, height] in pixels, when placed here
+  uploads: [],           // photos uploaded this session: {name, bytes, dims, url}
   swatchNames: new Map(),
   drag: null,
   dirty: false,
   replaceInto: null,
+  cat: 'text',           // the open drawer
 };
 
 // ── the bridge ────────────────────────────────────────────────
@@ -102,8 +111,7 @@ async function loadEngine() {
     if (done) break;
     parts.push(value);
     got += value.length;
-    const mb = (got / 1048576).toFixed(1);
-    el.loadMsg.textContent = 'Getting the designer ready… ' + mb + ' MB';
+    el.loadMsg.textContent = 'Getting the designer ready… ' + (got / 1048576).toFixed(1) + ' MB';
     if (total) el.loadBar.style.width = Math.min(100, (got / total) * 100).toFixed(1) + '%';
   }
   const bytes = new Uint8Array(got);
@@ -127,12 +135,16 @@ function validSpec(spec) {
   return null;
 }
 
+function resetLocalState() {
+  S.style.clear(); S.colour.clear(); S.imagePx.clear(); S.swatchNames.clear(); S.sel = null; S.page = 0;
+}
+
 function startJob(job) {
   const bad = validSpec(job && job.spec);
   if (bad) throw new Error('the job spec is not usable (' + bad + ')');
   const sp = job.spec;
   S.spec = { w: sp.trimW, h: sp.trimH, bleed: sp.bleed ?? 9, safety: sp.safety ?? 9, pages: sp.pages };
-  S.style.clear(); S.imagePx.clear(); S.swatchNames.clear(); S.sel = null; S.page = 0;
+  resetLocalState();
   let opened = false;
   if (typeof job.design === 'string' && job.design) {
     try { S.d.openDesign(job.design); opened = true; }
@@ -223,7 +235,7 @@ function refresh() {
   readDocument();
   if (!renderQueued) {
     renderQueued = true;
-    requestAnimationFrame(() => { renderQueued = false; renderPage(); draw(); });
+    requestAnimationFrame(() => { renderQueued = false; renderPage(); draw(); placeTextEditor(); });
   }
   updateChrome();
 }
@@ -266,7 +278,7 @@ function draw() {
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(S.pageCanvas, 0, 0, cw, ch);
 
-  const { w, h, bleed, safety } = S.spec;
+  const { w, h, safety } = S.spec;
   // Wash the part that gets cut off, so it reads as "not on the card".
   ctx.fillStyle = 'rgba(255,255,255,.45)';
   ctx.beginPath();
@@ -279,7 +291,6 @@ function draw() {
   ctx.setLineDash([6, 4]); ctx.strokeStyle = '#1f9d55';
   ctx.strokeRect(px(safety), px(safety), (w - 2 * safety) * S.k, (h - 2 * safety) * S.k);
   ctx.setLineDash([]);
-  void bleed;
 
   for (const it of S.items) if (problemsOf(it).length) {
     const r = itemRect(it);
@@ -294,13 +305,13 @@ function draw() {
   if (d && d.moved) {
     if (d.mode === 'move') {
       // A ghost of the item where it will land; the real move happens on release.
-      const sx = (r.x) * S.dpr, sy = (r.y) * S.dpr;
       ctx.globalAlpha = 0.85;
-      ctx.drawImage(S.pageCanvas, sx, sy, r.w * S.dpr, r.h * S.dpr, r.x + d.dx * S.k, r.y + d.dy * S.k, r.w, r.h);
+      ctx.drawImage(S.pageCanvas, r.x * S.dpr, r.y * S.dpr, r.w * S.dpr, r.h * S.dpr, r.x + d.dx * S.k, r.y + d.dy * S.k, r.w, r.h);
       ctx.globalAlpha = 1;
       r = { ...r, x: r.x + d.dx * S.k, y: r.y + d.dy * S.k };
-      if (d.snapX) { ctx.strokeStyle = '#d946ef'; ctx.beginPath(); ctx.moveTo(px(w / 2), 0); ctx.lineTo(px(w / 2), ch); ctx.stroke(); }
-      if (d.snapY) { ctx.strokeStyle = '#d946ef'; ctx.beginPath(); ctx.moveTo(0, px(h / 2)); ctx.lineTo(cw, px(h / 2)); ctx.stroke(); }
+      ctx.strokeStyle = '#d946ef'; ctx.lineWidth = 1;
+      if (d.snapX) { ctx.beginPath(); ctx.moveTo(px(w / 2), 0); ctx.lineTo(px(w / 2), ch); ctx.stroke(); }
+      if (d.snapY) { ctx.beginPath(); ctx.moveTo(0, px(h / 2)); ctx.lineTo(cw, px(h / 2)); ctx.stroke(); }
     } else {
       const b = d.to;
       r = { x: px(b[0]), y: px(b[1]), w: (b[2] - b[0]) * S.k, h: (b[3] - b[1]) * S.k };
@@ -311,7 +322,7 @@ function draw() {
   if (!isBackground(sel)) {
     ctx.fillStyle = '#fff';
     for (const [hx, hy] of corners(r)) {
-      ctx.beginPath(); ctx.arc(hx, hy, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hx, hy, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
   }
 }
@@ -347,8 +358,8 @@ function problemsOf(it) {
     const st = S.stories.get(it.story);
     if (st && st.overset) out.push('Some words don\'t fit in their box. Make the box bigger or the words smaller.');
   } else if (!isBackground(it)) {
-    const short = (edge, past) => past < -0.5 && past > -bleed + 0.5 && edge;
-    if (short(true, x0) || short(true, y0) || short(true, w - x1) || short(true, h - y1))
+    const short = past => past < -0.5 && past > -bleed + 0.5;
+    if (short(x0) || short(y0) || short(w - x1) || short(h - y1))
       out.push('A photo or shape goes past the cut line but stops before the red dotted line, which can leave a thin white edge. Stretch it to the red line, or keep it inside.');
   }
   if (isImage(it) && S.imagePx.has(it.id)) {
@@ -369,41 +380,45 @@ function updateChrome() {
   const msgs = [...new Set(S.items.flatMap(problemsOf))];
   el.warnings.textContent = '';
   for (const m of msgs) { const d = document.createElement('div'); d.textContent = m; el.warnings.appendChild(d); }
-  updatePanel();
+  el.emptyHint.hidden = S.items.length > 0;
+  updateContextBar();
 }
 
-function updatePanel() {
+function updateContextBar() {
   const it = selected();
-  el.panelEmpty.hidden = !!it;
-  el.panelText.hidden = !isText(it);
-  el.panelPhoto.hidden = !isImage(it);
-  el.panelColour.hidden = !(isText(it) || isShape(it));
-  el.panelCommon.hidden = !it || isBackground(it);
-  if (!it) return;
+  el.ctxHint.hidden = !!it;
+  el.ctxText.hidden = !isText(it);
+  el.ctxColour.hidden = !(isText(it) || isShape(it));
+  el.ctxPhoto.hidden = !isImage(it);
+  el.ctxCommon.hidden = !it || isBackground(it);
+  if (!it) { closeColours(); closeTextEditor(); return; }
+  if (!isText(it)) closeTextEditor();
+  let colour;
   if (isText(it)) {
     const st = textStyle(it.id);
-    if (document.activeElement !== el.textInput) {
-      const s = tryRun('story.get', { story: it.story });
-      el.textInput.value = s ? s.text || '' : '';
-    }
     el.fontPick.value = st.font;
     el.boldBtn.setAttribute('aria-pressed', String(st.bold));
-    el.sizeRange.value = String(st.size);
-    el.sizeOut.textContent = st.size + ' pt';
-    document.querySelectorAll('[data-align]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.align === st.align)));
-    $('colourLbl').textContent = 'Text colour';
-  } else if (isShape(it)) {
-    $('colourLbl').textContent = isBackground(it) ? 'Background colour' : 'Colour';
+    el.sizeOut.textContent = String(st.size);
+    el.alignIcon.setAttribute('d', ALIGN_ICON[st.align] || ALIGN_ICON.center);
+    colour = st.colour;
+  } else {
+    colour = S.colour.get(it.id);
   }
+  const c = COLOURS.find(x => x.name === colour);
+  el.colourDot.style.background = c ? c.css : 'conic-gradient(#e5252f, #ffe014, #39b54a, #0067b1, #6e3a96, #e5252f)';
+  [...el.swatches.children].forEach(b => b.setAttribute('aria-pressed', String(b.title === colour)));
 }
 
 function buildSwatches() {
   for (const c of COLOURS) {
-    const b = document.createElement('button');
-    b.type = 'button'; b.title = c.name; b.setAttribute('aria-label', c.name);
-    b.style.background = c.css;
-    b.addEventListener('click', () => applyColour(c));
-    el.swatches.appendChild(b);
+    const mk = () => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.title = c.name; b.setAttribute('aria-label', c.name);
+      b.style.background = c.css;
+      return b;
+    };
+    const a = mk(); a.addEventListener('click', () => { applyColour(c); closeColours(); }); el.swatches.appendChild(a);
+    const g = mk(); g.addEventListener('click', () => setBackground(c)); el.bgSwatches.appendChild(g);
   }
 }
 
@@ -412,7 +427,26 @@ function textStyle(id) {
   return S.style.get(id);
 }
 
-// ── selecting and the panel's actions ────────────────────────
+// ── the drawer (Text, Photos, Shapes, Background) ────────────
+
+function openDrawer(cat, { toggle = false } = {}) {
+  const small = matchMedia('(max-width: 860px)').matches;
+  if (small && toggle && S.cat === cat && el.drawer.classList.contains('open')) { closeDrawer(); return; }
+  S.cat = cat;
+  document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== cat; });
+  document.querySelectorAll('.railbtn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cat === cat)));
+  el.drawer.classList.add('open');
+}
+function closeDrawer() {
+  el.drawer.classList.remove('open');
+  if (matchMedia('(max-width: 860px)').matches) document.querySelectorAll('.railbtn').forEach(b => b.setAttribute('aria-pressed', 'false'));
+}
+// On a phone the drawer covers the design, so it closes once something is added.
+function afterAdd() { if (matchMedia('(max-width: 860px)').matches) closeDrawer(); }
+
+document.querySelectorAll('.railbtn').forEach(b => b.addEventListener('click', () => openDrawer(b.dataset.cat, { toggle: true })));
+
+// ── selecting, and the toolbar's actions ─────────────────────
 
 function select(id) {
   S.sel = id;
@@ -431,6 +465,8 @@ function swatchFor(c) {
   return name;
 }
 
+const cmyk = c => ({ c: c.cmyk[0], m: c.cmyk[1], y: c.cmyk[2], k: c.cmyk[3] });
+
 function applyColour(c) {
   const it = selected();
   if (!it) return;
@@ -441,8 +477,8 @@ function applyColour(c) {
       textStyle(it.id).colour = c.name;
     } catch (e) { console.error(e); toast('That colour could not be applied.'); return; }
   } else {
-    const [cc, m, y, k] = c.cmyk;
-    if (tryRun('object.color', { color: { c: cc, m, y, k }, ids: [it.id] }, 'That colour could not be applied.') === undefined) return;
+    if (tryRun('object.color', { color: cmyk(c), ids: [it.id] }, 'That colour could not be applied.') === undefined) return;
+    S.colour.set(it.id, c.name);
   }
   changed();
 }
@@ -456,32 +492,116 @@ function applyTextStyle(patch) {
     run('selection.set', { ids: [it.id] });
     run('type.char', { attrs: { fontFamily: f.family, fontStyle: st.bold ? f.bold : f.regular, size: st.size } });
     if ('align' in patch) run('type.para', { attrs: { align: st.align } });
+    fitText(it.id);
   } catch (e) { console.error(e); toast('That style could not be applied.'); return; }
   changed();
 }
 
-let textTimer = 0;
-el.textInput.addEventListener('input', () => {
-  clearTimeout(textTimer);
-  textTimer = setTimeout(() => {
-    const it = selected();
-    if (!isText(it)) return;
-    if (tryRun('story.setText', { story: it.story, text: el.textInput.value.slice(0, 2000) }) !== undefined) changed();
-  }, 250);
-});
+// Text boxes fit their words, as in Canva: after the words or their size change, the box shrinks
+// to its lines and then grows a line at a time until nothing is left over. (The engine stores an
+// auto-size setting but does not apply it while composing, so this does.)
+function fitText(id) {
+  const find = () => {
+    const ins = run('document.inspect');
+    const it = (((ins.spreads || [])[S.page] || {}).items || []).find(x => x.id === id);
+    const st = it && (ins.stories || []).find(x => x.id === it.story);
+    return it && st ? { it, st } : null;
+  };
+  const lineH = textStyle(id).size * 1.2;
+  let f = find();
+  if (!f) return;
+  const [x0, y0, x1, y1] = f.it.bounds;
+  const need = Math.max(1, f.st.lines || 0) * lineH + lineH * 0.35;
+  if (!f.st.overset && y1 - y0 - need > lineH * 0.5) {
+    run('transform.resize', { from: f.it.bounds, to: [x0, y0, x1, y0 + need], content: false, ids: [id] });
+    f = find();
+  }
+  for (let i = 0; f && f.st.overset && i < 40; i++) {
+    const b = f.it.bounds;
+    run('transform.resize', { from: b, to: [b[0], b[1], b[2], b[3] + lineH], content: false, ids: [id] });
+    f = find();
+  }
+}
+
+function nudgeSize(dir) {
+  const it = selected();
+  if (!isText(it)) return;
+  const s = textStyle(it.id).size;
+  const step = s < 20 ? 1 : s < 48 ? 2 : 4;
+  applyTextStyle({ size: Math.max(6, Math.min(200, s + dir * step)) });
+}
+
 el.fontPick.addEventListener('change', () => applyTextStyle({ font: el.fontPick.value }));
 el.boldBtn.addEventListener('click', () => applyTextStyle({ bold: el.boldBtn.getAttribute('aria-pressed') !== 'true' }));
-let sizeTimer = 0;
-el.sizeRange.addEventListener('input', () => {
-  el.sizeOut.textContent = el.sizeRange.value + ' pt';
-  clearTimeout(sizeTimer);
-  sizeTimer = setTimeout(() => applyTextStyle({ size: Number(el.sizeRange.value) }), 120);
+$('sizeDown').addEventListener('click', () => nudgeSize(-1));
+$('sizeUp').addEventListener('click', () => nudgeSize(1));
+$('alignBtn').addEventListener('click', () => {
+  const it = selected();
+  if (!isText(it)) return;
+  const cur = textStyle(it.id).align;
+  applyTextStyle({ align: ALIGNS[(ALIGNS.indexOf(cur) + 1) % ALIGNS.length] });
 });
-document.querySelectorAll('[data-align]').forEach(b => b.addEventListener('click', () => applyTextStyle({ align: b.dataset.align })));
+$('colourBtn').addEventListener('click', e => { e.stopPropagation(); el.colourPop.hidden ? openColours() : closeColours(); });
+function openColours() { el.colourPop.hidden = false; }
+function closeColours() { el.colourPop.hidden = true; }
+document.addEventListener('pointerdown', e => {
+  if (!el.colourPop.hidden && !el.colourPop.contains(e.target) && e.target !== $('colourBtn') && !$('colourBtn').contains(e.target)) closeColours();
+});
+
+// ── editing words, in a box right on the design ──────────────
+
+$('editText').addEventListener('click', openTextEditor);
+$('textDone').addEventListener('click', () => { commitText(); closeTextEditor(); });
+
+function openTextEditor() {
+  const it = selected();
+  if (!isText(it)) return;
+  const s = tryRun('story.get', { story: it.story });
+  el.textInput.value = s ? s.text || '' : '';
+  el.textEditor.hidden = false;
+  placeTextEditor();
+  el.textInput.focus();
+  el.textInput.select();
+}
+function closeTextEditor() { el.textEditor.hidden = true; }
+function placeTextEditor() {
+  if (el.textEditor.hidden) return;
+  const it = selected();
+  if (!isText(it)) { closeTextEditor(); return; }
+  const r = itemRect(it);
+  const c = el.canvas.getBoundingClientRect(), st = el.stage.getBoundingClientRect();
+  const left = Math.max(0, Math.min(c.left - st.left + r.x, st.width - el.textEditor.offsetWidth));
+  let top = c.top - st.top + r.y + r.h + 8;
+  if (top + el.textEditor.offsetHeight > st.height) top = Math.max(0, c.top - st.top + r.y - el.textEditor.offsetHeight - 8);
+  el.textEditor.style.left = left + 'px';
+  el.textEditor.style.top = top + 'px';
+}
+
+let textTimer = 0;
+function commitText() {
+  clearTimeout(textTimer);
+  const it = selected();
+  if (!isText(it)) return;
+  const text = el.textInput.value.slice(0, 2000);
+  const cur = tryRun('story.get', { story: it.story });
+  if (cur && cur.text === text) return;
+  if (tryRun('story.setText', { story: it.story, text }) === undefined) return;
+  tryRun('selection.set', { ids: [it.id] });
+  try { fitText(it.id); } catch (e) { console.error(e); }
+  changed();
+}
+el.textInput.addEventListener('input', () => { clearTimeout(textTimer); textTimer = setTimeout(commitText, 250); });
+el.textInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { commitText(); closeTextEditor(); }
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { commitText(); closeTextEditor(); }
+});
+
+// ── layers, copies, delete, photos ───────────────────────────
 
 $('remove').addEventListener('click', removeSelected);
 $('toFront').addEventListener('click', () => arrange('front'));
 $('toBack').addEventListener('click', () => arrange('back'));
+$('duplicate').addEventListener('click', duplicate);
 $('fillSide').addEventListener('click', fillSide);
 $('replacePhoto').addEventListener('click', () => { S.replaceInto = S.sel; el.photoPick.click(); });
 
@@ -503,6 +623,27 @@ function arrange(to) {
   changed();
 }
 
+function duplicate() {
+  const it = selected();
+  if (!it || isBackground(it)) return;
+  const before = new Set(S.items.map(i => i.id));
+  try {
+    run('selection.set', { ids: [it.id] });
+    run('edit.duplicate', {});
+  } catch (e) { console.error(e); toast('That could not be copied.'); return; }
+  readDocument();
+  const copy = S.items.find(i => !before.has(i.id));
+  if (copy) {
+    // Offset the copy a little so it's visibly a second one.
+    tryRun('transform.move', { dx: 12, dy: 12, ids: [copy.id] });
+    if (S.style.has(it.id)) S.style.set(copy.id, { ...S.style.get(it.id) });
+    if (S.colour.has(it.id)) S.colour.set(copy.id, S.colour.get(it.id));
+    if (S.imagePx.has(it.id)) S.imagePx.set(copy.id, S.imagePx.get(it.id));
+    S.sel = copy.id;
+  }
+  changed();
+}
+
 function bleedBox() {
   const b = S.spec.bleed;
   return [-b, -b, S.spec.w + b, S.spec.h + b];
@@ -514,6 +655,9 @@ function fillSide() {
   try {
     run('transform.resize', { from: it.bounds, to: bleedBox(), content: false, ids: [it.id] });
     run('object.fit', { mode: 'fillProportionally', ids: [it.id] });
+    const bg = background();
+    run('object.arrange', { to: 'back', ids: [it.id] });
+    if (bg) run('object.arrange', { to: 'back', ids: [bg.id] });
   } catch (e) { console.error(e); toast('The photo could not be resized.'); return; }
   changed();
 }
@@ -525,56 +669,87 @@ function safeBox() {
   return [s, s, S.spec.w - s, S.spec.h - s];
 }
 
-document.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => add(b.dataset.add)));
+// Canva's three text sizes, scaled to the card.
+const TEXT_KINDS = {
+  heading: { text: 'Add a heading', size: m => m / 8, bold: true, at: 0.3 },
+  subheading: { text: 'Add a subheading', size: m => m / 15, bold: true, at: 0.52 },
+  body: { text: 'Add a little bit of body text', size: m => m / 26, bold: false, at: 0.72 },
+};
 
-function add(kind) {
+document.querySelectorAll('[data-text]').forEach(b => b.addEventListener('click', () => addText(b.dataset.text)));
+document.querySelectorAll('[data-shape]').forEach(b => b.addEventListener('click', () => addShape(b.dataset.shape)));
+
+function addText(kind) {
+  if (!S.spec) return;
+  const t = TEXT_KINDS[kind] || TEXT_KINDS.body;
+  const [sx0, sy0, sx1, sy1] = safeBox();
+  const size = Math.max(8, Math.round(t.size(Math.min(S.spec.w, S.spec.h))));
+  const fw = (sx1 - sx0) * 0.85, fh = size * 2.4;
+  const cx = (sx0 + sx1) / 2;
+  const cy = Math.min(sy1 - fh / 2, Math.max(sy0 + fh / 2, sy0 + (sy1 - sy0) * t.at));
+  try {
+    const r = run('frame.create', { spread: S.page, rect: [cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2], content: 'text', text: t.text });
+    S.style.set(r.id, { font: 'clean', bold: t.bold, size, align: 'center', colour: 'Black' });
+    run('selection.set', { ids: [r.id] });
+    run('type.char', { attrs: { fontFamily: FONTS.clean.family, fontStyle: t.bold ? FONTS.clean.bold : FONTS.clean.regular, size, fill: '[Black]' } });
+    run('type.para', { attrs: { align: 'center' } });
+    fitText(r.id);
+    S.sel = r.id;
+    changed();
+    afterAdd();
+    openTextEditor();
+  } catch (e) { console.error(e); toast('That could not be added. Please try again.'); }
+}
+
+function addShape(kind) {
   if (!S.spec) return;
   const [sx0, sy0, sx1, sy1] = safeBox();
   const cx = (sx0 + sx1) / 2, cy = (sy0 + sy1) / 2;
+  const side = Math.min(sx1 - sx0, sy1 - sy0) * 0.4;
+  let rect = [cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2];
+  const params = { spread: S.page, content: 'unassigned' };
+  if (kind === 'circle') params.shape = 'ellipse';
+  else if (kind === 'triangle') { params.shape = 'polygon'; params.sides = 3; }
+  else if (kind === 'line') { const lw = (sx1 - sx0) * 0.6, th = Math.max(1.5, side / 40); rect = [cx - lw / 2, cy - th / 2, cx + lw / 2, cy + th / 2]; }
+  else params.shape = 'rectangle';
+  const colour = COLOURS.find(x => x.name === (kind === 'line' ? 'Black' : 'Blue'));
   try {
-    if (kind === 'text') {
-      const size = Math.max(12, Math.round(Math.min(S.spec.w, S.spec.h) / 14));
-      const fw = (sx1 - sx0) * 0.8, fh = size * 2.6;
-      const r = run('frame.create', { spread: S.page, rect: [cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2], content: 'text', text: 'Your text here' });
-      S.style.set(r.id, { font: 'clean', bold: true, size, align: 'center', colour: 'Black' });
-      run('selection.set', { ids: [r.id] });
-      run('type.char', { attrs: { fontFamily: FONTS.clean.family, fontStyle: FONTS.clean.bold, size, fill: '[Black]' } });
-      run('type.para', { attrs: { align: 'center' } });
-      S.sel = r.id;
-      changed();
-      el.textInput.focus();
-      el.textInput.select();
-    } else if (kind === 'rect' || kind === 'circle') {
-      const side = Math.min(sx1 - sx0, sy1 - sy0) * 0.4;
-      const r = run('frame.create', { spread: S.page, rect: [cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2],
-        content: 'unassigned', shape: kind === 'circle' ? 'ellipse' : 'rectangle' });
-      const c = COLOURS.find(x => x.name === 'Blue');
-      run('object.color', { color: { c: c.cmyk[0], m: c.cmyk[1], y: c.cmyk[2], k: c.cmyk[3] }, ids: [r.id] });
-      // New shapes come with a 1 pt black outline (a desktop-publishing default) that would print.
-      run('object.stroke', { swatch: '[None]', ids: [r.id] });
-      S.sel = r.id;
-      changed();
-    } else if (kind === 'background') {
-      let bg = background();
-      if (!bg) {
-        const r = run('frame.create', { spread: S.page, rect: bleedBox(), content: 'unassigned' });
-        const c = COLOURS.find(x => x.name === 'Navy');
-        run('object.color', { color: { c: c.cmyk[0], m: c.cmyk[1], y: c.cmyk[2], k: c.cmyk[3] }, ids: [r.id] });
-        run('object.stroke', { swatch: '[None]', ids: [r.id] });
-        run('object.arrange', { to: 'back', ids: [r.id] });
-        S.sel = r.id;
-        changed();
-      } else select(bg.id);
-      toast('Pick a colour on the right for the background.');
-    } else if (kind === 'photo') {
-      S.replaceInto = null;
-      el.photoPick.click();
-    }
-  } catch (e) {
-    console.error(e);
-    toast('That could not be added. Please try again.');
-  }
+    const r = run('frame.create', { ...params, rect });
+    run('object.color', { color: cmyk(colour), ids: [r.id] });
+    // New shapes come with a 1 pt black outline (a desktop-publishing default) that would print.
+    run('object.stroke', { swatch: '[None]', ids: [r.id] });
+    S.colour.set(r.id, colour.name);
+    S.sel = r.id;
+    changed();
+    afterAdd();
+  } catch (e) { console.error(e); toast('That could not be added. Please try again.'); }
 }
+
+function setBackground(c) {
+  if (!S.spec) return;
+  try {
+    let bg = background();
+    if (!bg) {
+      const r = run('frame.create', { spread: S.page, rect: bleedBox(), content: 'unassigned' });
+      run('object.stroke', { swatch: '[None]', ids: [r.id] });
+      run('object.arrange', { to: 'back', ids: [r.id] });
+      bg = { id: r.id };
+    }
+    run('object.color', { color: cmyk(c), ids: [bg.id] });
+    S.colour.set(bg.id, c.name);
+  } catch (e) { console.error(e); toast('The background could not be changed.'); return; }
+  changed();
+}
+
+$('noBackground').addEventListener('click', () => {
+  const bg = background();
+  if (!bg) return;
+  if (tryRun('edit.clear', { ids: [bg.id] }) !== undefined) { if (S.sel === bg.id) S.sel = null; changed(); }
+});
+
+// ── photos ───────────────────────────────────────────────────
+
+$('upload').addEventListener('click', () => { S.replaceInto = null; el.photoPick.click(); });
 
 el.photoPick.addEventListener('change', async () => {
   const file = el.photoPick.files && el.photoPick.files[0];
@@ -586,27 +761,85 @@ el.photoPick.addEventListener('change', async () => {
     dims = [bmp.width, bmp.height];
     bmp.close();
   } catch { toast('That file isn\'t a photo this designer can use. Try a JPEG or PNG.'); return; }
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  const up = { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()), dims, url: URL.createObjectURL(file) };
+  S.uploads.push(up);
+  addUploadThumb(up);
+  placePhoto(up, S.replaceInto);
+});
+
+function addUploadThumb(up) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.setAttribute('aria-label', 'Add ' + up.name); b.dataset.tip = 'Add this photo again';
+  const img = document.createElement('img'); img.src = up.url; img.alt = '';
+  b.appendChild(img);
+  b.addEventListener('click', () => placePhoto(up, null));
+  el.uploads.prepend(b);
+}
+
+function placePhoto(up, into) {
   try {
-    let id = S.replaceInto;
+    let id = into;
     if (id == null || !S.items.some(it => it.id === id)) {
       const [sx0, sy0, sx1, sy1] = safeBox();
       const cx = (sx0 + sx1) / 2, cy = (sy0 + sy1) / 2;
-      const maxW = (sx1 - sx0) * 0.6, maxH = (sy1 - sy0) * 0.6;
-      const k = Math.min(maxW / dims[0], maxH / dims[1]);
-      const fw = dims[0] * k, fh = dims[1] * k;
+      const k = Math.min(((sx1 - sx0) * 0.6) / up.dims[0], ((sy1 - sy0) * 0.6) / up.dims[1]);
+      const fw = up.dims[0] * k, fh = up.dims[1] * k;
       id = run('frame.create', { spread: S.page, rect: [cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2], content: 'graphic' }).id;
     }
-    JSON.parse(S.d.placeImage(bytes, file.name, id));
+    JSON.parse(S.d.placeImage(up.bytes, up.name, id));
     run('object.fit', { mode: 'fillProportionally', ids: [id] });
-    S.imagePx.set(id, dims);
+    S.imagePx.set(id, up.dims);
     S.sel = id;
     S.replaceInto = null;
     changed();
+    afterAdd();
   } catch (e) {
     console.error(e);
     toast('That photo could not be added. Try a smaller JPEG or PNG.');
   }
+}
+
+// ── opening an InDesign (IDML) file ──────────────────────────
+
+$('openFile').addEventListener('click', () => el.filePick.click());
+el.filePick.addEventListener('change', async () => {
+  const file = el.filePick.files && el.filePick.files[0];
+  el.filePick.value = '';
+  if (!file) return;
+  if (S.dirty && !confirm('Opening this file replaces your current design. Continue?')) return;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let opened;
+  try {
+    opened = JSON.parse(S.d.openFile(bytes, file.name));
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (msg.includes(INDD_UNSUPPORTED)) {
+      toast('That\'s an InDesign .indd file, which only InDesign can open. In InDesign choose File › Save As › InDesign Markup (IDML), then open the .idml file here.', 12000);
+    } else {
+      console.error(e);
+      toast('That file couldn\'t be opened. It needs to be an IDML file saved from InDesign.', 8000);
+    }
+    return;
+  }
+  // The calculator owns the size: a file built for a different size or page count is refused,
+  // and the design that was open stays.
+  const ins = run('document.inspect');
+  const st = ins.settings || {};
+  const fits = (a, b) => Math.abs(a - b) < 2;
+  const sameSize = (fits(st.pageWidth, S.spec.w) && fits(st.pageHeight, S.spec.h));
+  if (!sameSize || ins.pageCount !== S.spec.pages) {
+    tryRun('file.close', { index: opened.index });
+    const inch = v => +(v / 72).toFixed(2);
+    toast('That file is ' + inch(st.pageWidth) + ' × ' + inch(st.pageHeight) + ' in with ' + ins.pageCount + ' page' + (ins.pageCount === 1 ? '' : 's') +
+      ', but this order is ' + inch(S.spec.w) + ' × ' + inch(S.spec.h) + ' in with ' + S.spec.pages + '. Change the order to match, or open a file made for this size.', 12000);
+    refresh();
+    return;
+  }
+  resetLocalState();
+  S.dirty = true;
+  afterAdd();
+  refresh();
+  toast('Opened ' + file.name + '. Photos linked in the file may need uploading again.', 6000);
 });
 
 // ── tapping and dragging on the design ───────────────────────
@@ -630,6 +863,7 @@ function handleAt(x, y) {
 
 el.canvas.addEventListener('pointerdown', e => {
   if (!S.spec) return;
+  closeColours();
   const x = e.offsetX, y = e.offsetY;
   const h = handleAt(x, y);
   if (h >= 0) {
@@ -637,8 +871,8 @@ el.canvas.addEventListener('pointerdown', e => {
     S.drag = { mode: 'resize', corner: h, id: it.id, from: it.bounds.slice(), to: it.bounds.slice(), x, y, moved: false };
   } else {
     const it = hit(x, y);
-    if (!it) { select(null); return; }
-    if (it.id !== S.sel) select(it.id);
+    if (!it) { if (!el.textEditor.hidden) commitText(); select(null); return; }
+    if (it.id !== S.sel) { if (!el.textEditor.hidden) commitText(); select(it.id); }
     S.drag = isBackground(it) ? null : { mode: 'move', id: it.id, from: it.bounds.slice(), x, y, dx: 0, dy: 0, moved: false };
   }
   if (S.drag) el.canvas.setPointerCapture(e.pointerId);
@@ -661,7 +895,7 @@ el.canvas.addEventListener('pointermove', e => {
     d.dx = dx; d.dy = dy;
   } else {
     const [x0, y0, x1, y1] = d.from;
-    const nx = pt(e.offsetX), ny = pt(e.offsetY), min = 12;
+    const nx = pt(e.offsetX), ny = pt(e.offsetY), min = 6;
     const left = d.corner === 0 || d.corner === 2, top = d.corner === 0 || d.corner === 1;
     d.to = [left ? Math.min(nx, x1 - min) : x0, top ? Math.min(ny, y1 - min) : y0,
             left ? x1 : Math.max(nx, x0 + min), top ? y1 : Math.max(ny, y0 + min)];
@@ -669,11 +903,19 @@ el.canvas.addEventListener('pointermove', e => {
   draw();
 });
 
+let lastTap = { id: null, t: 0 };
 function endDrag() {
   const d = S.drag;
   S.drag = null;
   if (!d) return;
-  if (!d.moved) { draw(); if (isText(selected())) el.textInput.focus({ preventScroll: true }); return; }
+  if (!d.moved) {
+    draw();
+    // A second tap on selected text (or a double-click) opens its words for editing.
+    const now = performance.now();
+    if (isText(selected()) && lastTap.id === d.id && now - lastTap.t < 600) openTextEditor();
+    lastTap = { id: d.id, t: now };
+    return;
+  }
   try {
     if (d.mode === 'move') {
       if (Math.abs(d.dx) < 0.25 && Math.abs(d.dy) < 0.25) { draw(); return; }
@@ -688,13 +930,15 @@ function endDrag() {
 }
 el.canvas.addEventListener('pointerup', endDrag);
 el.canvas.addEventListener('pointercancel', () => { S.drag = null; draw(); });
+el.canvas.addEventListener('dblclick', () => { if (isText(selected())) openTextEditor(); });
 
 // ── undo, keys, print, back ──────────────────────────────────
 
 el.undo.addEventListener('click', undo);
 el.redo.addEventListener('click', redo);
-function undo() { if (tryRun('edit.undo', {}) !== undefined) { S.dirty = true; S.canRedo = true; refresh(); } }
+function undo() { closeTextEditor(); if (tryRun('edit.undo', {}) !== undefined) { S.dirty = true; S.canRedo = true; refresh(); } }
 function redo() {
+  closeTextEditor();
   try { run('edit.redo', {}); } catch { S.canRedo = false; updateChrome(); return; }
   S.dirty = true; refresh();
 }
@@ -703,8 +947,11 @@ document.addEventListener('keydown', e => {
   const typing = /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
-  if (typing || !S.sel) return;
+  if (typing) return;
+  if (e.key === 'Escape') { closeColours(); select(null); return; }
+  if (!S.sel) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeSelected(); return; }
+  if (e.key === 'Enter' && isText(selected())) { e.preventDefault(); openTextEditor(); return; }
   const step = e.shiftKey ? 9 : 1;
   const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
   const it = selected();
@@ -714,7 +961,7 @@ document.addEventListener('keydown', e => {
   }
 });
 
-el.print.addEventListener('click', openChecks);
+el.print.addEventListener('click', () => { commitText(); closeTextEditor(); openChecks(); });
 $('sheetCancel').addEventListener('click', () => { el.sheet.hidden = true; });
 $('sheetGo').addEventListener('click', doPrint);
 
@@ -805,11 +1052,11 @@ window.addEventListener('beforeunload', e => { if (!S.embedded && S.dirty) { e.p
 // ── small things ─────────────────────────────────────────────
 
 let toastTimer = 0;
-function toast(msg) {
+function toast(msg, ms = 4000) {
   el.toast.textContent = msg;
   el.toast.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.toast.hidden = true; }, 4000);
+  toastTimer = setTimeout(() => { el.toast.hidden = true; }, ms);
 }
 
 function showFatal(msg) {
@@ -825,6 +1072,8 @@ new ResizeObserver(() => layout()).observe(el.stage);
 
 (async () => {
   buildSwatches();
+  openDrawer('text');
+  if (matchMedia('(max-width: 860px)').matches) closeDrawer();
   try {
     await loadEngine();
   } catch (e) {
