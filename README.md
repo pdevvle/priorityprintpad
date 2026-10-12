@@ -23,8 +23,15 @@ rules are in [CLAUDE.md](CLAUDE.md).
 
 ## Status
 
-**P0: measuring.** `wasm.yml` builds upstream's web app (`apps/designcraft-web`) as a stand-in to
-measure payload size and load time before any editor UI is written. Nothing ships yet.
+**P1 started: simple mode.** `shell/designer.html` is the editor customers see: add text, a
+photo, boxes, circles and a background colour; tap to select, drag to move, corner handles to
+resize; undo; plain-language warnings (words near the cut, white edges, blurry photos); and Print,
+which hands the calculator a PDF/X-4 print file through the brief's §6 handshake. Opened on its own
+it runs a demo postcard and Print downloads the file.
+
+Preview: <https://pdevvle.github.io/priorityprintpad/> (simple mode) and
+<https://pdevvle.github.io/priorityprintpad/full/> (upstream's whole app, the P0 stand-in).
+P0 measurements are in `fixtures/p0/README.md`. Nothing is wired into the store yet.
 
 ## Upstream
 
