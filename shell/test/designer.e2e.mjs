@@ -12,6 +12,10 @@
 // (tools, the Control bar's exact values, Layers, Swatches, Align, type, zoom), each checked
 // in the exported PDF.
 //
+// Then what would spoil a print file, caught before it is made: characters the fonts can't draw,
+// a phone photo stored sideways, something off the card, a hidden item, and a design reopened at
+// another size.
+//
 // Run: node shell/test/designer.e2e.mjs SITE_DIR
 //      (Playwright from PPS_PLAYWRIGHT, default /opt/node22/lib/node_modules/playwright)
 
@@ -34,7 +38,13 @@ const HOST = `<!doctype html><meta charset="utf-8"><body>
   window.got = [];
   addEventListener('message', ev => {
     if (ev.origin !== location.origin) return;
-    const m = ev.data; window.got.push({ type: m.type, v: m.v, keys: Object.keys(m),
+    const m = ev.data;
+    if (typeof m.design === 'string') window.lastDesign = m.design;
+    // (No regex here: this script is inside a template literal.)
+    const pdfText = m.pdf ? new TextDecoder('latin1').decode(new Uint8Array(m.pdf)) : '';
+    const at = pdfText.indexOf('/MediaBox');
+    const mb = at < 0 ? null : [0, pdfText.slice(pdfText.indexOf('[', at) + 1, pdfText.indexOf(']', at))];
+    window.got.push({ type: m.type, v: m.v, keys: Object.keys(m), mediaBox: mb ? mb[1].trim().split(' ').filter(Boolean).map(Number) : null,
       pdfBytes: m.pdf ? m.pdf.byteLength : 0, pdfHead: m.pdf ? String.fromCharCode(...new Uint8Array(m.pdf.slice(0, 5))) : '',
       thumbs: m.thumbs ? m.thumbs.length : 0, design: typeof m.design === 'string' ? m.design.length : 0, manifest: m.manifest || null });
     const w = document.getElementById('f').contentWindow;
@@ -331,6 +341,8 @@ const errors = [];
   await page.click('#zoomFit');
 
   await page.click('#print');
+  const advLines = await page.locator('#checks li').allTextContents();
+  ok('the print check says a hidden item won\'t print', advLines.some(l => /1 hidden item won't print/.test(l)), JSON.stringify(advLines));
   const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#sheetGo')]);
   const pdf = await readFile(await dl.path());
   if (process.env.PPS_PDF_ADV) await (await import('node:fs/promises')).writeFile(process.env.PPS_PDF_ADV, pdf);
@@ -393,6 +405,56 @@ const errors = [];
   await ctx.close();
 }
 
+// ── going to print: what would spoil the print file is caught before it is made ──
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, acceptDownloads: true });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(BASE + 'designer.html?product=Postcard');
+  await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  // Characters the bundled fonts can't draw print as empty boxes.
+  await page.click('[data-text="heading"]');
+  await page.fill('#textInput', 'Party 🎉 日本');
+  await page.click('#textDone');
+  await page.waitForTimeout(300);
+  const w1 = await page.locator('#warnings div').allTextContents();
+  ok('an emoji or a letter the fonts lack is named before printing (it would print as a box)', w1.some(t => /empty boxes/.test(t) && t.includes('🎉') && t.includes('日')), JSON.stringify(w1));
+  // A phone photo: stored sideways, with an EXIF note to turn it.
+  await page.click('[data-cat="photos"]');
+  await page.setInputFiles('#photoPick', path.join(HERE, 'fixtures', 'phone-exif6.jpg'));
+  await page.waitForSelector('#ctxPhoto:not([hidden])', { timeout: 20000 });
+  await page.click('#fillSide');
+  await page.waitForTimeout(400);
+  // Card points → the canvas's own pixels.
+  const rgbAt = (x, y) => page.evaluate(([x, y]) => {
+    const c = document.getElementById('canvas');
+    const s = c.width / (648 + 18);
+    return [...c.getContext('2d').getImageData(Math.round((x + 9) * s), Math.round((y + 9) * s), 1, 1).data].slice(0, 3);
+  }, [x, y]);
+  const tl = await rgbAt(60, 40), br = await rgbAt(590, 400);
+  ok('a phone photo is placed upright, as the phone shows it (red top-left, blue bottom-right)', tl[0] > 170 && tl[1] < 90 && br[2] > 170 && br[0] < 90, JSON.stringify({ tl, br }));
+  // Something pushed off the card doesn't print.
+  await page.click('[data-cat="shapes"]');
+  await page.click('[data-shape="square"]');
+  for (let i = 0; i < 50; i++) await page.keyboard.press('Shift+ArrowRight');
+  await page.waitForTimeout(200);
+  const w2 = await page.locator('#warnings div').allTextContents();
+  ok('a shape moved off the card is flagged (it won\'t print)', w2.some(t => /off the edge of the card/.test(t)), JSON.stringify(w2));
+  await page.click('#print');
+  const stops = await page.locator('#checks li.stop').allTextContents();
+  ok('the print check marks both as problems, not just warnings', stops.some(t => /empty boxes/.test(t)) && stops.some(t => /^Front: .*off the edge/.test(t)), JSON.stringify(stops));
+  ok('…and the button says "Print anyway"', (await page.textContent('#sheetGo')) === 'Print anyway');
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#sheetGo')]);
+  const pdf = await readFile(await dl.path());
+  const txt = pdf.toString('latin1');
+  const imgs = [...txt.matchAll(/\/Subtype\s*\/Image/g)].map(m => txt.slice(Math.max(0, m.index - 300), m.index + 300));
+  const dims = imgs.map(d => [(d.match(/\/Width\s+(\d+)/) || [])[1], (d.match(/\/Height\s+(\d+)/) || [])[1]].join('x'));
+  ok('…and the photo in the PDF is upright: 300 x 200, not the stored 200 x 300', dims.includes('300x200') && !dims.includes('200x300'), JSON.stringify(dims));
+  ok('…with the button back to its own words afterwards', !(await page.isVisible('#sheet')));
+  await ctx.close();
+}
+
 // ── embedded in a calculator (handshake, brief §6) ──
 {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
@@ -432,6 +494,32 @@ const errors = [];
   await page.waitForFunction(() => window.got.some(m => m.type === 'pps-design:close'), null, { timeout: 10000 });
   const c = await page.evaluate(() => window.got.find(m => m.type === 'pps-design:close'));
   ok('Back posts pps-design:close with the design', c.design > 0);
+
+  // The calculator reopens the design (its "Edit design"). Simple's text toolbar reads the type
+  // from the design, not a guess.
+  const spec75 = { trimW: 504, trimH: 360, bleed: 9, safety: 9, pages: 2, pageMultiple: 2, folds: [], bindEdge: null, spine: 0 };
+  const spec64 = { ...spec75, trimW: 432, trimH: 288 };
+  const reopen = spec => page.evaluate(spec => document.getElementById('f').contentWindow.postMessage({ type: 'pps-design:job', v: 1, spec, design: window.lastDesign }, location.origin), spec);
+  // The heading sits centred, 30% of the way down the safe area.
+  const clickHeading = async (wPt, hPt) => {
+    const b = await frame.locator('#canvas').boundingBox();
+    await page.mouse.click(b.x + b.width / 2, b.y + b.height * (18 + (hPt - 18) * 0.3) / (hPt + 18));
+  };
+  await clickHeading(504, 360);
+  const sizeBefore = await frame.locator('#sizeOut').textContent();
+  await reopen(spec75);
+  await page.waitForTimeout(500);
+  await clickHeading(504, 360);
+  ok('a reopened design shows its real type size in the text toolbar', (await frame.locator('#sizeOut').textContent()) === sizeBefore && sizeBefore !== '24', sizeBefore + ' → ' + await frame.locator('#sizeOut').textContent());
+  // Reopened for an order that has since changed size, it is resized to the order, never printed
+  // at its own.
+  await reopen(spec64);
+  await frame.locator('#productSize', { hasText: '6 × 4 in' }).waitFor({ timeout: 10000 });
+  await frame.locator('#print').click();
+  await frame.locator('#sheetGo').click();
+  await page.waitForFunction(() => window.got.filter(m => m.type === 'pps-design:print').length === 2, null, { timeout: 60000 });
+  const p2 = await page.evaluate(() => window.got.filter(m => m.type === 'pps-design:print')[1]);
+  ok('a design reopened at a new order size prints at that size (450 x 306 pt)', p2.mediaBox && Math.round(p2.mediaBox[2]) === 450 && Math.round(p2.mediaBox[3]) === 306 && p2.manifest.trimPt[0] === 432, JSON.stringify(p2.mediaBox));
   ok('nothing else was posted', (await page.evaluate(() => window.got.map(m => m.type))).every(t => /^pps-design:(ready|option|print|close)$/.test(t)));
   await ctx.close();
 }
