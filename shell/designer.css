@@ -19,7 +19,8 @@
   background: var(--bg);
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+/* The closed Order options panel waits off the right edge: it must not widen the page (a phone panned sideways into it). */
+html, body { margin: 0; height: 100%; overflow-x: hidden; overflow-x: clip; }
 body { background: var(--bg); overscroll-behavior: none; }
 [hidden] { display: none !important; }
 .muted { color: var(--muted); }

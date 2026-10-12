@@ -80,8 +80,18 @@ designer only shows them and reports a change.
    - text is scaled with the design.
 4. **Undo stops at the resize**, so the design can never drift from the size being priced.
 
-**Removing a side that has a design on it.** The designer asks the customer first. If they say
-no, it sends the old value back as `pps-design:option`.
+**Removing a side that has a design on it.** The designer asks the customer first. For an option
+keyed `sides` (a page count, by convention) it asks before the option is sent, since the
+calculator drops that side's artwork as soon as it hears; otherwise it asks when the new spec
+arrives, and if they say no it sends the old value back as `pps-design:option`.
+
+**Trying sizes.** A run of size changes with nothing done to the design in between starts from
+the design as it was before the first, so going Portrait and back gives the design back as it
+was. Locked items move with the rest. Text is scaled run by run, leading included, so mixed sizes
+stay mixed.
+
+**A job the designer refuses.** A spec under half an inch either way (a size sent in inches, not
+points) or with a safety margin as big as the card is answered with `pps-design:error`.
 
 **Orientation.** The postcard calculator adds orientation to the list itself. The price is the
 same either way, so the calculator keeps it out of its own fields and only changes the spec.
