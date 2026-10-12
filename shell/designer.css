@@ -165,8 +165,6 @@ svg { width: 22px; height: 22px; flex: none; }
 
 /* ── phones: the rail along the bottom, the drawer as a sheet above it ── */
 @media (max-width: 860px) {
-  .modeswitch { display: none; }
-  .ordertab { top: auto; bottom: 96px; }
   .top { padding: 6px 8px; gap: 6px; min-height: 56px; }
   #productSize, .btn.big .lbl-sm { display: none; }
   .btn.huge { padding: 0 14px; font-size: 16px; }
@@ -292,3 +290,10 @@ svg { width: 22px; height: 22px; flex: none; }
 .op-field .help { font-weight: 400; font-size: 13px; color: var(--muted); }
 /* In Advanced the tab sits on the panels' edge, clear of the Layers list. */
 #app.adv .ordertab { right: 272px; }
+
+/* Phones: Simple only (the switch is hidden and the page refuses Advanced), and the Order
+   options tab sits above the rail. Last in the file so it wins over the rules above. */
+@media (max-width: 860px) {
+  .modeswitch { display: none; }
+  .ordertab { top: auto; bottom: 96px; }
+}
