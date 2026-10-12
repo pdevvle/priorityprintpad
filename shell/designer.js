@@ -242,6 +242,24 @@ function startJob(job) {
   S.undoFloor = 0;
   if (Array.isArray(job.options)) setOptions(job.options);
   el.print.disabled = false;
+  // The calculator owns the size. A design saved at another size or page count (the order
+  // changed since it was made) is resized to this one, never printed at its own.
+  if (opened) {
+    const ins = run('document.inspect'), st = ins.settings || {};
+    const fits = (a, b) => Math.abs(a - b) < 0.01;
+    if (!fits(st.pageWidth, S.spec.w) || !fits(st.pageHeight, S.spec.h) || ins.pageCount !== S.spec.pages) {
+      const want = S.spec;
+      S.spec = { ...want, w: st.pageWidth, h: st.pageHeight, pages: ins.pageCount };
+      try { resizeDocument(want); }
+      catch (e) {
+        console.error(e);
+        S.spec = want;
+        run('file.new', { width: want.w, height: want.h, pages: want.pages, facingPages: false, bleed: want.bleed, margins: want.safety, title: el.productName.textContent });
+        S.dirty = false;
+        toast('Your earlier design was made for a different size and could not be resized, so this is a fresh start.', 8000);
+      }
+    }
+  }
   layout();
 }
 
@@ -351,6 +369,9 @@ function readDocument() {
   S.items = S.allItems.filter(it => !it.hidden);
   S.stories = new Map((ins.stories || []).map(s => [s.id, s]));
   S.swatches = ins.swatches || [];
+  // The engine's own preflight: characters its fonts can't draw, and photo resolution for photos
+  // this page didn't place (a reopened design, an IDML file).
+  try { S.preflight = (run('preflight.run') || {}).issues || []; } catch (e) { console.error(e); S.preflight = []; }
   for (const n of S.swatches) if (!S.swatchNames.has(n)) S.swatchNames.set(n, n);
   if (S.sel != null && !S.items.some(it => it.id === S.sel)) S.sel = null;
 }
@@ -498,15 +519,22 @@ function isBackground(it) {
 function background() { return S.items.find(isBackground) || null; }
 
 // Plain-language problems with one item, as the print check and the outlines see them.
+// Problems that spoil the print rather than risk it: Print still works, but the checks mark them
+// and the button says "Print anyway".
+const OVERSET_MSG = 'Some words don\'t fit in their box and won\'t print. Make the box bigger or the words smaller.';
+const OFFCARD_MSG = 'Something is off the edge of the card and won\'t print. Drag it back on, or delete it.';
+const SEVERE = new Set([OVERSET_MSG, OFFCARD_MSG]);
+
 function problemsOf(it) {
   const out = [];
   const { w, h, bleed, safety } = S.spec;
   const [x0, y0, x1, y1] = it.bounds;
+  if (x1 <= -bleed || y1 <= -bleed || x0 >= w + bleed || y0 >= h + bleed) return [OFFCARD_MSG];
   if (isText(it)) {
     if (x0 < safety - 0.5 || y0 < safety - 0.5 || x1 > w - safety + 0.5 || y1 > h - safety + 0.5)
       out.push('Some words are outside the green dashed line and could be cut off.');
     const st = S.stories.get(it.story);
-    if (st && st.overset) out.push('Some words don\'t fit in their box. Make the box bigger or the words smaller.');
+    if (st && st.overset) out.push(OVERSET_MSG);
     // Words on a fold crack and fade where the paper bends; on a perforation they are torn in two.
     const near = g => g.axis === 'v' ? x0 < g.at + safety && x1 > g.at - safety : y0 < g.at + safety && y1 > g.at - safety;
     if (linesOn('folds', S.page).some(near)) out.push('Some words are on or too close to a fold (the orange line). Keep them inside one panel.');
@@ -516,12 +544,27 @@ function problemsOf(it) {
     if (short(x0) || short(y0) || short(w - x1) || short(h - y1))
       out.push('A photo or shape goes past the cut line but stops before the red dotted line, which can leave a thin white edge. Stretch it to the red line, or keep it inside.');
   }
-  if (isImage(it) && S.imagePx.has(it.id)) {
-    const [pw, ph] = S.imagePx.get(it.id);
-    const s = Math.max((x1 - x0) / pw, (y1 - y0) / ph);   // points per pixel when the photo fills its box
-    const ppi = 72 / s;
-    if (ppi < LOW_PPI) out.push('This photo is small for its size and may print blurry (' + Math.round(ppi) + ' pixels per inch; 150 or more looks sharp). Use a larger photo or make it smaller.');
+  if (isImage(it)) {
+    let ppi = null;
+    if (S.imagePx.has(it.id)) {
+      const [pw, ph] = S.imagePx.get(it.id);
+      ppi = 72 / Math.max((x1 - x0) / pw, (y1 - y0) / ph);   // points per pixel when the photo fills its box
+    } else {
+      const low = (S.preflight || []).find(p => p.kind === 'lowResolution' && p.item === it.id);
+      const m = low && /effective (\d+) ppi/.exec(low.message);
+      if (m) ppi = Number(m[1]);
+    }
+    if (ppi != null && ppi < LOW_PPI) out.push('This photo is small for its size and may print blurry (' + Math.round(ppi) + ' pixels per inch; 150 or more looks sharp). Use a larger photo or make it smaller.');
   }
+  return out;
+}
+
+// Problems with the whole design rather than one thing on it.
+function docProblems() {
+  const out = [];
+  const chars = [...new Set((S.preflight || []).filter(p => p.kind === 'missingGlyphs')
+    .flatMap(p => p.message.replace(/ and \d+ more$/, '').split(': ').slice(1).join(': ').split(' ')).filter(Boolean))];
+  if (chars.length) out.push('These characters can\'t be printed in the fonts here and would print as empty boxes: ' + chars.join(' ') + '. Delete them (emoji, and letters from other alphabets, can\'t be printed).');
   return out;
 }
 
@@ -536,7 +579,7 @@ function updateChrome() {
   el.undo.disabled = !S.canUndo;
   el.redo.disabled = !S.canRedo;
   [...el.sides.children].forEach((b, i) => b.setAttribute('aria-selected', String(i === S.page)));
-  const msgs = [...new Set(S.items.flatMap(problemsOf))];
+  const msgs = [...new Set([...docProblems(), ...S.items.flatMap(problemsOf)])];
   el.warnings.textContent = '';
   for (const m of msgs) { const d = document.createElement('div'); d.textContent = m; el.warnings.appendChild(d); }
   el.emptyHint.hidden = S.items.length > 0 || S.mode === 'adv';
@@ -582,9 +625,24 @@ function buildSwatches() {
   }
 }
 
+// The Simple toolbar's view of a text frame, read from the engine each time: a design reopened
+// (Back, then Edit design), an IDML file or a change made in Advanced mode leaves this page no note
+// of its own, and a guessed 24 pt would make the size buttons jump a 60 pt headline to 26.
 function textStyle(id) {
-  if (!S.style.has(id)) S.style.set(id, { font: 'clean', bold: false, size: 24, align: 'center', colour: 'Black' });
-  return S.style.get(id);
+  const st = S.style.get(id) || { font: 'clean', bold: false, size: 24, align: 'center', colour: 'Black' };
+  S.style.set(id, st);
+  try {
+    run('selection.set', { ids: [id] });
+    const a = run('type.selectionAttrs') || {}, ch = a.chars || {}, pa = a.para || {};
+    if (ch.size > 0) st.size = Math.round(ch.size * 2) / 2;
+    const font = Object.keys(FONTS).find(k => FONTS[k].family === ch.fontFamily);
+    if (font) st.font = font;
+    if (typeof ch.fontStyle === 'string') st.bold = /bold/i.test(ch.fontStyle);
+    if (pa.align) st.align = pa.align === 'leftJustified' ? 'left' : ALIGNS.includes(pa.align) ? pa.align : st.align;
+    const c = COLOURS.find(x => (x.swatch || S.swatchNames.get('PPS ' + x.name) || 'PPS ' + x.name) === ch.fill);
+    if (c) st.colour = c.name;
+  } catch { /* keep the page's note */ }
+  return st;
 }
 
 // ── the drawer (Text, Photos, Shapes, Background) ────────────
@@ -925,17 +983,59 @@ el.photoPick.addEventListener('change', async () => {
   const file = el.photoPick.files && el.photoPick.files[0];
   el.photoPick.value = '';
   if (!file) return;
-  let dims;
-  try {
-    const bmp = await createImageBitmap(file);
-    dims = [bmp.width, bmp.height];
-    bmp.close();
-  } catch { toast('That file isn\'t a photo this designer can use. Try a JPEG or PNG.'); return; }
-  const up = { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()), dims, url: URL.createObjectURL(file) };
+  let bmp;
+  try { bmp = await decodePhoto(file); }
+  catch { toast('That file isn\'t a photo this designer can use. Try a JPEG or PNG.'); return; }
+  let bytes = new Uint8Array(await file.arrayBuffer()), name = file.name;
+  // A phone stores a photo taken upright as a sideways picture plus an EXIF note to turn it; the
+  // engine places the pixels as stored, so the photo would print on its side. The browser has
+  // already turned it: keep that version.
+  if (jpegOrientation(bytes) > 1) {
+    try { bytes = await encodePhoto(bmp); name = name.replace(/\.[^.]*$/, '') + '.jpg'; }
+    catch (e) { console.error(e); }
+  }
+  const up = { name, bytes, dims: [bmp.width, bmp.height], url: URL.createObjectURL(file), bmp };
   S.uploads.push(up);
   addUploadThumb(up);
   placePhoto(up, S.replaceInto);
 });
+
+async function decodePhoto(file) {
+  try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+  catch { return await createImageBitmap(file); }
+}
+
+// The photo as the browser shows it, as a high-quality JPEG.
+async function encodePhoto(bmp) {
+  const c = document.createElement('canvas');
+  c.width = bmp.width; c.height = bmp.height;
+  c.getContext('2d').drawImage(bmp, 0, 0);
+  const blob = await new Promise((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error('photo could not be encoded'))), 'image/jpeg', 0.95));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+// EXIF Orientation (1–8) of a JPEG, or 0 when it has none.
+function jpegOrientation(b) {
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return 0;
+  let i = 2;
+  while (i + 4 <= b.length && b[i] === 0xff) {
+    const marker = b[i + 1], len = (b[i + 2] << 8) | b[i + 3];
+    if (marker === 0xda || len < 2) return 0;
+    if (marker === 0xe1 && len >= 16 && b[i + 4] === 0x45 && b[i + 5] === 0x78 && b[i + 6] === 0x69 && b[i + 7] === 0x66) {
+      const t = i + 10, le = b[t] === 0x49;
+      const u16 = o => (t + o + 2 <= b.length ? (le ? b[t + o] | (b[t + o + 1] << 8) : (b[t + o] << 8) | b[t + o + 1]) : 0);
+      const u32 = o => (u16(le ? o + 2 : o) * 65536 + u16(le ? o : o + 2));
+      const ifd = u32(4), n = u16(ifd);
+      for (let k = 0; k < n && k < 200; k++) {
+        const e = ifd + 2 + k * 12;
+        if (u16(e) === 0x0112) { const v = u16(e + 8); return v >= 1 && v <= 8 ? v : 0; }
+      }
+      return 0;
+    }
+    i += 2 + len;
+  }
+  return 0;
+}
 
 function addUploadThumb(up) {
   const b = document.createElement('button');
@@ -948,15 +1048,29 @@ function addUploadThumb(up) {
 
 function placePhoto(up, into) {
   try {
-    let id = into;
+    let id = into, created = false;
     if (id == null || !S.items.some(it => it.id === id)) {
+      created = true;
       const [sx0, sy0, sx1, sy1] = safeBox();
       const cx = (sx0 + sx1) / 2, cy = (sy0 + sy1) / 2;
       const k = Math.min(((sx1 - sx0) * 0.6) / up.dims[0], ((sy1 - sy0) * 0.6) / up.dims[1]);
       const fw = up.dims[0] * k, fh = up.dims[1] * k;
       id = run('frame.create', { spread: S.page, rect: [cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2], content: 'graphic' }).id;
     }
-    JSON.parse(S.d.placeImage(up.bytes, up.name, id));
+    try { JSON.parse(S.d.placeImage(up.bytes, up.name, id)); }
+    catch (e) {
+      // A format the browser reads but the engine doesn't (an iPhone's HEIC, AVIF): place the
+      // browser's own decoding of it instead.
+      if (up.reencoded || !up.bmp) throw e;
+      if (created) tryRun('edit.clear', { ids: [id] });
+      up.reencoded = true;
+      encodePhoto(up.bmp).then(b => { up.bytes = b; up.name = up.name.replace(/\.[^.]*$/, '') + '.jpg'; placePhoto(up, into); })
+        .catch(err => { console.error(err); toast('That photo could not be added. Try a smaller JPEG or PNG.'); });
+      return;
+    }
+    // Placed once, the bytes are ones the engine reads: the decoded copy (a phone photo's is
+    // tens of megabytes) isn't needed again.
+    if (up.bmp) { up.bmp.close(); up.bmp = null; }
     run('object.fit', { mode: 'fillProportionally', ids: [id] });
     S.imagePx.set(id, up.dims);
     S.sel = id;
@@ -1174,20 +1288,26 @@ function allPages() {
 }
 
 function openChecks() {
-  const pages = allPages();
+  readDocument();
+  const ins = run('document.inspect');
+  const spreads = (ins.spreads || []).map(sp => sp.items || []);
   const keep = S.page;
-  const lines = [];
-  pages.forEach((items, i) => {
+  const lines = docProblems().map(p => ['stop', p]);
+  spreads.forEach((all, i) => {
+    const items = all.filter(it => !it.hidden);
     S.page = i; S.items = items;
     const probs = [...new Set(items.flatMap(problemsOf))];
     if (!items.length) lines.push(['warn', sideName(i) + ' is blank. That\'s fine if you meant it to be.']);
-    else if (probs.length) probs.forEach(p => lines.push(['warn', sideName(i) + ': ' + p]));
+    else if (probs.length) probs.forEach(p => lines.push([SEVERE.has(p) ? 'stop' : 'warn', sideName(i) + ': ' + p]));
     else lines.push(['ok', sideName(i) + ' looks ready.']);
+    const hidden = all.length - items.length;
+    if (hidden) lines.push(['warn', sideName(i) + ': ' + hidden + (hidden === 1 ? ' hidden item' : ' hidden items') + ' won\'t print. Show it in Layers if it should.']);
   });
   S.page = keep;
   readDocument();
   el.checks.textContent = '';
   for (const [cls, text] of lines) { const li = document.createElement('li'); li.className = cls; li.textContent = text; el.checks.appendChild(li); }
+  $('sheetGo').textContent = lines.some(([cls]) => cls === 'stop') ? 'Print anyway' : 'Looks good, continue';
   el.sheet.hidden = false;
   $('sheetGo').focus();
 }
@@ -1208,6 +1328,7 @@ function thumbs() {
 
 function doPrint() {
   const go = $('sheetGo');
+  const label = go.textContent;
   go.disabled = true; go.textContent = 'Preparing your print file…';
   setTimeout(() => {
     try {
@@ -1237,7 +1358,7 @@ function doPrint() {
       console.error(e);
       toast('The print file could not be made. Please try again.');
     } finally {
-      go.disabled = false; go.textContent = 'Looks good, continue';
+      go.disabled = false; go.textContent = label;
     }
   }, 30);
 }
@@ -1839,8 +1960,8 @@ function resizeDocument(next) {
     }
     if (!to.every((v, i) => Math.abs(v - b[i]) < 0.01)) run('transform.resize', { from: b, to, content: false, ids: [id] });
     if (kind === '<image>') run('object.fit', { mode: 'fillProportionally', ids: [id] });
-    if (kind === '<text frame>' && S.style.has(id) && Math.abs(k - 1) > 0.01) {
-      const st = S.style.get(id);
+    if (kind === '<text frame>' && Math.abs(k - 1) > 0.01) {
+      const st = textStyle(id);
       st.size = Math.max(4, Math.round(st.size * k * 2) / 2);
       run('selection.set', { ids: [id] });
       run('type.char', { attrs: { size: st.size } });

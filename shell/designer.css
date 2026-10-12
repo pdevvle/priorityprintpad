@@ -147,6 +147,8 @@ svg { width: 22px; height: 22px; flex: none; }
 .checks li::before { position: absolute; left: 0; top: 0; font-weight: 700; }
 .checks li.ok::before { content: "✓"; color: #1f9d55; }
 .checks li.warn::before { content: "!"; color: var(--warn-ink); background: var(--warn-bg); border-radius: 50%; width: 20px; text-align: center; }
+.checks li.stop { color: #b42318; font-weight: 600; }
+.checks li.stop::before { content: "✕"; color: #fff; background: #d92d20; border-radius: 50%; width: 20px; text-align: center; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .row.end { justify-content: flex-end; }
 
