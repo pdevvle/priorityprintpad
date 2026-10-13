@@ -248,6 +248,7 @@ function startJob(job) {
   const sp = job.spec;
   S.spec = { w: sp.trimW, h: sp.trimH, bleed: sp.bleed ?? 9, safety: sp.safety ?? 9, pages: sp.pages, ...specGuides(sp) };
   resetLocalState();
+  el.resume.hidden = true;
   let opened = false, lostDesign = false;
   if (typeof job.design === 'string' && job.design) {
     try { keepOnly(JSON.parse(S.d.openDesign(job.design)).index); opened = true; }
