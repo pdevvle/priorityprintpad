@@ -160,10 +160,7 @@ impl Bridge {
         // What prints, and only that: non-printing layers and objects are left out, as in the PDF.
         // (They were drawn, so the customer saw things on the design that never reached paper.)
         let opts = RenderOptions { printing_only: true, ..Default::default() };
-        let out = self
-            .renderer
-            .render_page(&doc, &cache, page, scale, bleed, &opts)
-            .ok_or_else(|| format!("renderPage: there is no page {page}"))?;
+        let out = self.renderer.render_page(&doc, &cache, page, scale, bleed, &opts).ok_or_else(|| format!("renderPage: there is no page {page}"))?;
         Ok(Rendered { width: out.width, height: out.height, rgba: out.to_straight() })
     }
 
