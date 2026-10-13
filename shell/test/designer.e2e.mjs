@@ -128,6 +128,8 @@ function inflatedText(pdf) {
 
 // Images drawn in a PDF (its image XObjects).
 const imageCount = pdf => (pdf.toString('latin1').match(/\/Subtype\s*\/Image\b/g) || []).length;
+// A page box of the PDF's first page (MediaBox, TrimBox, BleedBox), rounded.
+const pdfBox = (pdf, name) => { const m = new RegExp('/' + name + '\\s*\\[([^\\]]+)\\]').exec(pdf.toString('latin1')); return m ? m[1].trim().split(/\s+/).map(v => Math.round(+v)) : null; };
 // The PDF's first MediaBox, rounded.
 const mediaBox = pdf => { const m = /\/MediaBox\s*\[([^\]]+)\]/.exec(pdf.toString('latin1')); return m ? m[1].trim().split(/\s+/).map(v => Math.round(+v)) : null; };
 
@@ -350,7 +352,7 @@ const errors = [];
 
   await page.click('#print');
   const advLines = await page.locator('#checks li').allTextContents();
-  ok('the print check says a hidden item won\'t print', advLines.some(l => /1 hidden item won't print/.test(l)), JSON.stringify(advLines));
+  ok('the print check says a hidden item won\'t print', advLines.some(l => /1 hidden or non-printing item won't print/.test(l)), JSON.stringify(advLines));
   const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#sheetGo')]);
   const pdf = await readFile(await dl.path());
   if (process.env.PPS_PDF_ADV) await (await import('node:fs/promises')).writeFile(process.env.PPS_PDF_ADV, pdf);
@@ -647,6 +649,179 @@ const errors = [];
   for (let i = 0; i < 4; i++) { await page.click('#zoomIn'); await page.waitForTimeout(250); }
   const toastShown = await page.isVisible('#toast');
   ok('a 24 × 36 in poster zoomed in is still drawn', !toastShown && !logged.some(t => /render|preview/i.test(t)), (await page.textContent('#toast')) + ' ' + logged.join(' | ').slice(0, 200));
+  await ctx.close();
+}
+
+// ── the third sweep (2026-10-13): files from InDesign, undo, text, handles, keys ──
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, acceptDownloads: true });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  page.on('dialog', d => d.accept());
+  const fresh = async (q = '') => {
+    await page.goto(BASE + 'designer.html?product=Postcard' + q);
+    await page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+    await page.evaluate(() => { const r = document.getElementById('resume'); if (r) r.hidden = true; });
+  };
+  const toastText = async () => { await page.waitForSelector('#toast:not([hidden])', { timeout: 15000 }); const t = await page.textContent('#toast'); await page.evaluate(() => { document.getElementById('toast').hidden = true; }); return t; };
+  const openIdml = async name => { await page.setInputFiles('#filePick', path.join(HERE, 'fixtures', name)); return toastText(); };
+  const printPdf = async () => {
+    await page.click('#print');
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#sheetGo')]);
+    await page.evaluate(() => { document.getElementById('toast').hidden = true; });
+    return readFile(await dl.path());
+  };
+  const checks = async () => { await page.click('#print'); const l = await page.locator('#checks li').evaluateAll(ls => ls.map(x => x.className + ': ' + x.textContent)); await page.click('#sheetCancel'); return l; };
+  // A canvas pixel at a point on the page (points from the trim's top-left), as [r, g, b].
+  const pixel = (x, y) => page.evaluate(([x, y]) => {
+    const c = document.getElementById('canvas'), k = c.width / parseFloat(getComputedStyle(c).width);
+    const css = parseFloat(getComputedStyle(c).width) / (648 + 18);
+    return [...c.getContext('2d').getImageData(Math.round((x + 9) * css * k), Math.round((y + 9) * css * k), 1, 1).data].slice(0, 3);
+  }, [x, y]);
+  const isWhite = px => px.every(v => v > 235);
+  const canvasAt = async (x, y) => { const b = await page.locator('#canvas').boundingBox(); const k = b.width / (648 + 18); return [b.x + (x + 9) * k, b.y + (y + 9) * k]; };
+
+  // An IDML with no bleed, one with a quarter-inch bleed, one 1.5 pt wider: all print at the order's trim and bleed.
+  for (const [file, what] of [['variant-nobleed.idml', 'no bleed'], ['variant-bleed18.idml', 'a quarter-inch bleed'], ['variant-wide15.idml', 'a page 1.5 pt wider']]) {
+    await fresh();
+    await openIdml(file);
+    const pdf = await printPdf();
+    ok('an IDML with ' + what + ' prints at the order\'s trim and bleed (666 × 450, trim inset 9)', JSON.stringify(pdfBox(pdf, 'MediaBox')) === '[0,0,666,450]' && JSON.stringify(pdfBox(pdf, 'TrimBox')) === '[9,9,657,441]', JSON.stringify(pdfBox(pdf, 'MediaBox')) + ' ' + JSON.stringify(pdfBox(pdf, 'TrimBox')));
+  }
+
+  // Non-printing layers and objects are not drawn, not on the design, and counted as won't print.
+  for (const [file, x, y] of [['variant-layers.idml', 200, 150], ['variant-nonprinting.idml', 200, 330]]) {
+    await fresh();
+    await openIdml(file);
+    await page.waitForTimeout(300);
+    ok(file + ': what won\'t print isn\'t drawn on the design', isWhite(await pixel(x, y)), JSON.stringify(await pixel(x, y)));
+    ok(file + ': …and the print check says it won\'t print', (await checks()).some(l => /non-printing items? won't print/.test(l)));
+  }
+
+  // Parent-page items become ordinary items: seen by the check, and resized with the card.
+  await fresh();
+  await openIdml('variant-master2.idml');
+  let lines = await checks();
+  ok('parent-page items count: a back holding only parent items isn\'t called blank', !lines.some(l => /Back is blank/.test(l)), JSON.stringify(lines));
+  await page.click('#orderTab');
+  await page.selectOption('#orderFields select[data-key="orientation"]', 'portrait');
+  await page.waitForTimeout(500);
+  await page.click('#orderClose');
+  await page.click('#sides button:nth-child(2)');
+  await page.waitForTimeout(400);
+  const pc = await page.evaluate(() => { const c = document.getElementById('canvas'); return [c.width, c.height]; });
+  const bottom = await page.evaluate(([w, h]) => [...document.getElementById('canvas').getContext('2d').getImageData(Math.round(w / 2), Math.round(h * 0.9), 1, 1).data].slice(0, 3), pc);
+  ok('…and a parent background still covers the card after a turn to portrait', !isWhite(bottom), JSON.stringify(bottom));
+
+  // Groups are taken apart: their words are checked.
+  await fresh();
+  await openIdml('variant-group-overset.idml');
+  ok('words in a group that don\'t fit are a problem in the check', (await checks()).some(l => /^stop: .*don't fit/.test(l)));
+  await fresh();
+  await openIdml('variant-group-edge.idml');
+  ok('words in a group past the card\'s edge are a problem in the check', (await checks()).some(l => /^stop: .*run past the edge/.test(l)));
+
+  // Both sides on one spread is refused, and the design stays.
+  await fresh();
+  const tOne = await openIdml('variant-onespread.idml');
+  ok('an IDML with both sides on one spread is refused, saying how to fix it', /side by side on a spread/.test(tOne) && await page.isVisible('#emptyHint'), tOne);
+
+  // Editing one word keeps the other words' sizes; a frame from the file keeps its place.
+  await fresh();
+  await openIdml('card-9x6-mixed.idml');
+  const [mx, my] = await canvasAt(324, 190);
+  await page.mouse.click(mx, my);
+  await page.click('#editText');
+  const words = await page.inputValue('#textInput');
+  await page.fill('#textInput', words.replace(/(\w)(\w*)$/, (m, a, b) => a.toUpperCase() + b));
+  await page.click('#textDone');
+  let pdf = await printPdf();
+  ok('editing one word of a mixed-size box keeps its sizes (18, 24, 36)', JSON.stringify(tfSizes(pdf)) === '[18,24,36]', JSON.stringify(tfSizes(pdf)));
+  await fresh();
+  await openIdml('variant-vcenter.idml');
+  await page.click('#modeAdv');
+  await page.waitForTimeout(300);
+  const b2 = await page.locator('#canvas').boundingBox(), k2 = b2.width / (648 + 18);
+  await page.mouse.click(b2.x + (324 + 9) * k2, b2.y + (216 + 9) * k2);
+  const before = [await page.inputValue('#ctlY'), await page.inputValue('#ctlH')];
+  await page.click('#ctlEdit');
+  await page.fill('#textInput', (await page.inputValue('#textInput')) + '!');
+  await page.click('#textDone');
+  await page.waitForTimeout(200);
+  const after = [await page.inputValue('#ctlY'), await page.inputValue('#ctlH')];
+  ok('a text frame from a file keeps its size when its words change (not shrunk to them)', JSON.stringify(before) === JSON.stringify(after), JSON.stringify(before) + ' → ' + JSON.stringify(after));
+
+  // A line lengthened with its handle keeps its thickness; a turned square given a new W keeps its shape.
+  await page.click('#modeSimple');
+  await fresh();
+  await page.click('.railbtn[data-cat="shapes"]');
+  await page.click('[data-shape="line"]');
+  await page.click('#modeAdv');
+  await page.waitForTimeout(300);
+  const lineH = await page.inputValue('#ctlH');
+  const r3 = await page.evaluate(() => { const c = document.getElementById('canvas').getBoundingClientRect(); return [c.x, c.y, c.width]; });
+  const k3 = r3[2] / (648 + 18);
+  const lx1 = 324 + 0.3 * (648 - 18) , ly = 216;
+  await page.mouse.move(r3[0] + (lx1 + 9) * k3, r3[1] + (ly + 9) * k3);
+  await page.mouse.down();
+  await page.mouse.move(r3[0] + (lx1 + 9 + 60) * k3, r3[1] + (ly + 9) * k3, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  ok('a line lengthened by its handle keeps its thickness', (await page.inputValue('#ctlH')) === lineH, lineH + ' → ' + await page.inputValue('#ctlH'));
+  await page.evaluate(() => document.activeElement.blur());
+  await page.keyboard.press('Delete');
+  await page.click('#modeSimple');
+  await page.click('[data-shape="square"]');
+  await page.click('#modeAdv');
+  await page.waitForTimeout(300);
+  await page.fill('#ctlRot', '30'); await page.press('#ctlRot', 'Enter');
+  const w0 = +(await page.inputValue('#ctlW')), h0 = +(await page.inputValue('#ctlH'));
+  await page.fill('#ctlW', String(+(w0 * 2).toFixed(3))); await page.press('#ctlW', 'Enter');
+  await page.waitForTimeout(200);
+  const h1 = +(await page.inputValue('#ctlH'));
+  ok('a turned square given twice the W keeps its shape (H doubles too, no skew)', Math.abs(h1 / h0 - 2) < 0.02, h0 + ' → ' + h1);
+
+  // One Undo takes back one action.
+  await page.click('#modeSimple');
+  await fresh();
+  await page.click('[data-text="heading"]');
+  await page.click('#textDone');
+  await page.click('#undo');
+  ok('one Undo takes back Add a heading', await page.isVisible('#emptyHint'));
+  await page.click('.railbtn[data-cat="shapes"]');
+  await page.click('[data-shape="square"]');
+  await page.click('#undo');
+  ok('one Undo takes back Add a square', await page.isVisible('#emptyHint'));
+
+  // Smaller never makes small text bigger; Enter on a focused button presses it.
+  await page.click('.railbtn[data-cat="text"]');
+  await page.click('[data-text="body"]');
+  await page.click('#textDone');
+  await page.click('#modeAdv');
+  await page.waitForTimeout(300);
+  await page.fill('#ctlSize', '4'); await page.press('#ctlSize', 'Enter');
+  await page.click('#modeSimple');
+  await page.waitForTimeout(300);
+  await page.click('#sizeDown');
+  ok('Smaller leaves 4 pt fine print at 4 pt (it made it 6)', (await page.textContent('#sizeOut')).trim() === '4', await page.textContent('#sizeOut'));
+  await page.focus('#boldBtn');
+  const bold0 = await page.getAttribute('#boldBtn', 'aria-pressed');
+  await page.keyboard.press('Enter');
+  ok('Enter on a focused button presses it, not the text editor', (await page.isHidden('#textEditor')) && (await page.getAttribute('#boldBtn', 'aria-pressed')) !== bold0);
+
+  // Dragged off the card, a shape stays in reach.
+  await page.click('.railbtn[data-cat="shapes"]');
+  await page.click('[data-shape="circle"]');
+  const [sx, sy] = await canvasAt(324, 216);
+  await page.mouse.move(sx, sy);
+  await page.mouse.down();
+  await page.mouse.move(sx - 2000, sy, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  const warns = await page.locator('#warnings div').allTextContents();
+  ok('a shape dragged far off the card stays partly on the canvas (not "off the edge")', !warns.some(t => /off the edge of the card/.test(t)), JSON.stringify(warns));
+  await page.mouse.click(...(await canvasAt(-6, 216)));
+  ok('…where a tap reaches it again', await page.isVisible('#ctxCommon'));
   await ctx.close();
 }
 

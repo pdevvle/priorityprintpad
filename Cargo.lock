@@ -3404,7 +3404,9 @@ name = "pps-bridge"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "designcraft-doc",
  "designcraft-engine",
+ "designcraft-format",
  "designcraft-render",
  "serde_json",
  "wasm-bindgen",

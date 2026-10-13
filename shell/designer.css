@@ -326,3 +326,4 @@ svg { width: 22px; height: 22px; flex: none; }
 .saved-list .smeta { color: var(--muted); font-size: 13px; }
 .saved-list .sacts { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
 .saved-list .sacts .btn { min-height: 40px; }
+.warnings .btn { min-height: 32px; padding: 0 10px; margin-left: 6px; font-size: 13px; }

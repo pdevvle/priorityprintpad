@@ -106,6 +106,7 @@ const S = {
   swatches: [],          // the document's swatch names
   opacity: new Map(),    // item id → opacity % last set or read here: a hint for reading it back (opacityPct)
   opaque: new Set(),     // ids of items at 100% opacity, read from the engine at each refresh
+  noPrint: new Set(),    // ids of items that won't print (layer hidden or non-printing, or Nonprinting)
   options: [],           // Order options from the calculator: [{key, label, type, value, choices?, min?, max?, step?, help?}]
   lastOption: null,      // {key, prev}: the change waiting on the calculator, to put back if refused
   price: null,           // the last price the calculator sent (display only)
@@ -124,8 +125,27 @@ const S = {
 // ── the bridge ────────────────────────────────────────────────
 
 function run(command, params = {}) {
+  groupStep();
   const out = S.d.execute(command, JSON.stringify(params));
   return out ? JSON.parse(out) : null;
+}
+
+// Everything one customer action does (Add a heading: create the frame, set its type, its
+// alignment, fit it) is one undo step: the engine records each command, and one Undo used to leave
+// a state the customer never made (a blue square with a black outline). The commands of one task
+// (an event handler's synchronous run) are folded into one entry once it ends; reading the history
+// folds whatever is open first.
+let stepOpen = false;
+function groupStep() {
+  if (stepOpen || !S.d || typeof S.d.beginStep !== 'function') return;
+  S.d.beginStep();
+  stepOpen = true;
+  setTimeout(flushStep, 0);
+}
+function flushStep() {
+  if (!stepOpen) return;
+  stepOpen = false;
+  try { S.d.endStep(); } catch (e) { console.error(e); }
 }
 
 function tryRun(command, params, failMsg) {
@@ -272,7 +292,9 @@ function startJob(job) {
   if (opened) {
     const want = S.spec;
     try {
-      if (fitOpenedToOrder(want).dropped) toast(droppedMsg(want), 9000);
+      const fit = fitOpenedToOrder(want);
+      if (fit.dropped) toast(droppedMsg(want), 9000);
+      if (!fit.resized) normalizeOpened();
     } catch (e) {
       console.error(e);
       keepOnly(run('file.new', { width: want.w, height: want.h, pages: want.pages, facingPages: false, bleed: want.bleed, margins: want.safety, title: el.productName.textContent }).index);
@@ -302,6 +324,36 @@ function fitOpenedToOrder(want) {
   try { resizeDocument(want); } catch (e) { S.spec = want; throw e; }
   return { resized: true, dropped };
 }
+// A document opened from a file or a saved design, made to be what the designer shows and checks:
+// the order's exact trim, bleed and margins (an IDML within 2 pt of the size, or saved without
+// bleed, printed at its own: no bleed at all, or 649.5 pt wide); parent-page items copied onto each
+// page as ordinary items (they printed but couldn't be seen, checked, moved or resized); groups
+// taken apart (their words weren't checked for overset or edges, and couldn't be edited). The
+// customer can't undo past this.
+function normalizeOpened() {
+  const ins = run('document.inspect');
+  const pages = ins.pageCount || S.spec.pages;
+  if ((ins.parents || []).some(pp => pp.items > 0)) {
+    for (let pg = 0; pg < pages; pg++) {
+      try { run('layout.overrideParentItems', { page: pg }); } catch { continue; }   // no parent on this page
+      try { run('layout.detachAll', { page: pg }); } catch (e) { console.error(e); }
+    }
+    run('layout.pages.applyParent', { pages: [...Array(pages).keys()], parent: null });
+  }
+  for (let round = 0; round < 10; round++) {
+    const groups = (run('document.inspect').spreads || []).flatMap(sp => sp.items || []).filter(it => it.kind === '<group>' && !it.locked).map(it => it.id);
+    if (!groups.length) break;
+    for (const id of groups) tryRun('object.ungroup', { ids: [id] });
+  }
+  run('layout.documentSetup', { width: S.spec.w, height: S.spec.h, pages: S.spec.pages, bleed: S.spec.bleed });
+  run('layout.marginsAndColumns', { margins: S.spec.safety });
+  flushStep();
+  try { S.undoFloor = ((run('document.history') || {}).undo || []).length; } catch { S.undoFloor = 0; }
+}
+// One page per spread: InDesign can put the front and back side by side on one, which reads here
+// as one page holding both (the back never checked, half of it off the card after a resize).
+const oneSidePerSpread = ins => (ins.spreads || []).every(sp => (sp.pages || []).length === 1);
+
 const droppedMsg = want => 'This order prints ' + (want.pages === 1 ? 'one side' : want.pages + ' sides') + ', so the rest of that design was left out. Change the order to more sides to keep it.';
 
 function demoJob() {
@@ -407,12 +459,16 @@ function refresh() {
 }
 
 function readDocument() {
+  flushStep();
   const ins = run('document.inspect');
   try { S.undoDepth = (run('document.history').undo || []).length; } catch { S.undoDepth = ins.canUndo ? S.undoFloor + 1 : S.undoFloor; }
   S.canUndo = !!ins.canUndo && S.undoDepth > S.undoFloor;
   const sp = (ins.spreads || [])[S.page] || { items: [] };
+  // Items on a hidden or non-printing layer, or marked Nonprinting (an InDesign file can have all
+  // three), aren't drawn (the engine renders what prints) and aren't on the design to tap or check.
+  try { S.noPrint = new Set(typeof S.d.notPrinting === 'function' ? JSON.parse(S.d.notPrinting()) : []); } catch (e) { console.error(e); S.noPrint = new Set(); }
   S.allItems = sp.items || [];
-  S.items = S.allItems.filter(it => !it.hidden);
+  S.items = S.allItems.filter(it => !it.hidden && !S.noPrint.has(it.id));
   S.stories = new Map((ins.stories || []).map(s => [s.id, s]));
   S.swatches = ins.swatches || [];
   // The engine's own preflight: characters its fonts can't draw, and photo resolution for photos
@@ -619,9 +675,20 @@ function problemsOf(it) {
       const m = low && /effective (\d+) ppi/.exec(low.message);
       if (m) ppi = Number(m[1]);
     }
-    if (ppi != null && ppi < LOW_PPI) out.push('This photo is small for its size and may print blurry (' + Math.round(ppi) + ' pixels per inch; 150 or more looks sharp). Use a larger photo or make it smaller.');
+    if (ppi != null && ppi < LOW_PPI) out.push('This photo is small for its size and may print blurry (' + (ppi < 1 ? 'under 1' : Math.round(ppi)) + ' pixels per inch; 150 or more looks sharp). Use a larger photo or make it smaller.');
   }
   return out;
+}
+
+// Puts what is off the card (from a file, or before drags were kept in reach) back in the middle
+// of it, and selects it.
+function bringBack() {
+  const off = S.items.filter(it => problemsOf(it)[0] === OFFCARD_MSG && !it.locked);
+  for (const it of off) {
+    const [x0, y0, x1, y1] = it.bounds;
+    tryRun('transform.move', { dx: S.spec.w / 2 - (x0 + x1) / 2, dy: S.spec.h / 2 - (y0 + y1) / 2, ids: [it.id] });
+  }
+  if (off.length) { S.sel = off[off.length - 1].id; changed(); }
 }
 
 // Problems with the whole design rather than one thing on it, as [message, severe].
@@ -652,7 +719,15 @@ function updateChrome() {
   [...el.sides.children].forEach((b, i) => b.setAttribute('aria-selected', String(i === S.page)));
   const msgs = [...new Set([...docProblems().map(([m]) => m), ...S.items.flatMap(problemsOf)])];
   el.warnings.textContent = '';
-  for (const m of msgs) { const d = document.createElement('div'); d.textContent = m; el.warnings.appendChild(d); }
+  for (const m of msgs) {
+    const d = document.createElement('div'); d.textContent = m;
+    if (m === OFFCARD_MSG) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.textContent = 'Bring it back';
+      b.addEventListener('click', bringBack);
+      d.append(' ', b);
+    }
+    el.warnings.appendChild(d);
+  }
   el.emptyHint.hidden = S.items.length > 0 || S.mode === 'adv';
   updateContextBar();
   if (S.mode === 'adv' && S.spec) { updateControl(); updatePanels(); }
@@ -809,6 +884,9 @@ function applyTextStyle(patch) {
 // Text boxes fit their words, as in Canva: after the words or their size change, the box shrinks
 // to its lines and then grows a line at a time until nothing is left over. (The engine stores an
 // auto-size setting but does not apply it while composing, so this does.)
+// Frames made by Add text fit their words both ways; any other frame (from IDML, drawn with the
+// Type tool) only grows, so a frame set to centre its words, or drawn tall, keeps its size.
+const AUTO_FIT = 'pps-autofit';
 function fitText(id, page = S.page) {
   const find = () => {
     const ins = run('document.inspect');
@@ -829,7 +907,9 @@ function fitText(id, page = S.page) {
   if (!f) return;
   const [x0, y0, x1, y1] = f.it.bounds;
   const need = Math.max(1, f.st.lines || 0) * lineH + lineH * 0.35;
-  if (!f.st.overset && y1 - y0 - need > lineH * 0.5) {
+  let ours = false;
+  try { ours = ((run('object.findByLabel', { label: AUTO_FIT }) || {}).ids || []).includes(id); } catch { /* grow only */ }
+  if (ours && !f.st.overset && y1 - y0 - need > lineH * 0.5) {
     run('transform.resize', { from: f.it.bounds, to: [x0, y0, x1, y0 + need], content: false, ids: [id] });
     f = find();
   }
@@ -845,7 +925,9 @@ function nudgeSize(dir) {
   if (!isText(it)) return;
   const s = textStyle(it.id).size;
   const step = s < 20 ? 1 : s < 48 ? 2 : 4;
-  applyTextStyle({ size: Math.max(6, Math.min(200, s + dir * step)) });
+  // Limits only in the direction asked: Smaller made 4 pt fine print 6 pt, and Bigger shrank 240 pt.
+  const next = dir < 0 ? Math.max(Math.min(6, s), s - step) : Math.min(Math.max(200, s), s + step);
+  if (next !== s) applyTextStyle({ size: next });
 }
 
 el.fontPick.addEventListener('change', () => applyTextStyle({ font: el.fontPick.value }));
@@ -931,10 +1013,30 @@ function commitText() {
   const text = cleanText(el.textInput.value.slice(0, TEXT_MAX));
   const cur = tryRun('story.get', { story: it.story });
   if (cur && cur.text === text) return;
-  if (tryRun('story.setText', { story: it.story, text }) === undefined) return;
+  // Only what changed is replaced, so the words around it keep their type: replacing the whole
+  // story set every word in the first one's (a headline of three sizes became one).
+  try { replaceChanged(it.story, cur ? cur.text || '' : '', text); }
+  catch (e) {
+    console.error(e);
+    if (tryRun('story.setText', { story: it.story, text }) === undefined) return;
+  }
   tryRun('selection.set', { ids: [it.id] });
   try { fitText(it.id); } catch (e) { console.error(e); }
   changed();
+}
+// Replaces the part of a story between what `cur` and `next` share at the start and the end.
+function replaceChanged(story, cur, next) {
+  const a = Array.from(cur), b = Array.from(next);
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let q = 0;
+  while (q < a.length - p && q < b.length - p && a[a.length - 1 - q] === b[b.length - 1 - q]) q++;
+  const bytes = list => list.reduce((n, ch) => n + utf8Len(ch.codePointAt(0)), 0);
+  const start = bytes(a.slice(0, p)), end = start + bytes(a.slice(p, a.length - q));
+  const mid = b.slice(p, b.length - q).join('');
+  run('text.select', { story, anchor: start, focus: end });
+  if (mid) run('text.insert', { text: mid, raw: true });
+  else if (end > start) run('text.delete', {});
 }
 el.textInput.addEventListener('input', () => { clearTimeout(textTimer); textTimer = setTimeout(commitText, 250); });
 // Anything outside the text box (a tap on the design, a button, a key) finds the words saved.
@@ -1039,9 +1141,11 @@ function addText(kind) {
   try {
     const r = run('frame.create', { spread: S.page, rect: [cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2], content: 'text', text: t.text });
     S.style.set(r.id, { font: 'clean', bold: t.bold, size, align: 'center', colour: 'Black' });
+    run('object.label', { label: AUTO_FIT, ids: [r.id] });
     run('selection.set', { ids: [r.id] });
     run('type.char', { attrs: { fontFamily: FONTS.clean.family, fontStyle: t.bold ? FONTS.clean.bold : FONTS.clean.regular, size, fill: '[Black]' } });
-    run('type.para', { attrs: { align: 'center' } });
+    // No automatic hyphens: a web address or an email split with a hyphen reads as a different one.
+    run('type.para', { attrs: { align: 'center', hyphenate: false } });
     fitText(r.id);
     S.sel = r.id;
     changed();
@@ -1194,7 +1298,7 @@ function placePhoto(up, into) {
       const fw = up.dims[0] * k, fh = up.dims[1] * k;
       id = run('frame.create', { spread: S.page, rect: [cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2], content: 'graphic' }).id;
     }
-    try { JSON.parse(S.d.placeImage(up.bytes, up.name, id)); }
+    try { groupStep(); JSON.parse(S.d.placeImage(up.bytes, up.name, id)); }
     catch (e) {
       // A format the browser reads but the engine doesn't (an iPhone's HEIC, AVIF): place the
       // browser's own decoding of it instead.
@@ -1440,6 +1544,12 @@ async function openDesignFrom(src) {
     return false;
   }
   const ins = run('document.inspect'), st = ins.settings || {};
+  if (!oneSidePerSpread(ins)) {
+    tryRun('file.close', { index: opened.index });
+    toast('That file puts more than one page side by side on a spread. In InDesign, choose File › Document Setup, untick Facing Pages, make sure each spread holds one page, then save as IDML again.', 14000);
+    refresh();
+    return false;
+  }
   const tol = isIdml ? 2 : 0.01;
   const sameSize = Math.abs(st.pageWidth - S.spec.w) < tol && Math.abs(st.pageHeight - S.spec.h) < tol && ins.pageCount === S.spec.pages;
   const desc = inch(st.pageWidth) + ' × ' + inch(st.pageHeight) + ' in with ' + sidesText(ins.pageCount);
@@ -1463,8 +1573,19 @@ async function openDesignFrom(src) {
   S.resizeBase = null;
   S.sizeChanged = false;
   const order = S.spec;
-  if (sameSize) keepOnly(opened.index);
-  else {
+  if (sameSize) {
+    keepOnly(opened.index);
+    try { normalizeOpened(); }
+    catch (e) {
+      console.error(e);
+      if (before) keepOnly(JSON.parse(S.d.openDesign(before)).index);
+      S.docGen++;
+      S.autoKey = docKey();
+      layout();
+      toast('That file couldn\'t be made ready to print here, so your design is as it was.', 8000);
+      return false;
+    }
+  } else {
     try {
       if (fitOpenedToOrder(order).dropped) toast(droppedMsg(order), 9000);   // leaves only the fitted design open
     } catch (e) {
@@ -1660,13 +1781,19 @@ el.canvas.addEventListener('pointermove', e => {
     const cx = (x0 + x1) / 2 + dx, cy = (y0 + y1) / 2 + dy;
     d.snapX = Math.abs(cx - S.spec.w / 2) < snap; if (d.snapX) dx += S.spec.w / 2 - cx;
     d.snapY = Math.abs(cy - S.spec.h / 2) < snap; if (d.snapY) dy += S.spec.h / 2 - cy;
+    // Some of it stays on the canvas, where a finger can reach it again: dragged clean off, it could
+    // only be found again with Undo or Advanced's Layers panel (phones have neither).
+    const keep = Math.min(12 / S.k, (x1 - x0) / 2, (y1 - y0) / 2), b = S.spec.bleed;
+    dx = Math.min(Math.max(dx, -b + keep - x1), S.spec.w + b - keep - x0);
+    dy = Math.min(Math.max(dy, -b + keep - y1), S.spec.h + b - keep - y0);
     d.dx = dx; d.dy = dy;
   } else {
     const [x0, y0, x1, y1] = d.from;
-    const nx = pt(e.offsetX), ny = pt(e.offsetY), min = 6;
+    // A line is thin one way: its own thickness is its least there, or lengthening it thickened it.
+    const nx = pt(e.offsetX), ny = pt(e.offsetY), minW = Math.min(6, x1 - x0), minH = Math.min(6, y1 - y0);
     const left = d.corner === 0 || d.corner === 2, top = d.corner === 0 || d.corner === 1;
-    d.to = [left ? Math.min(nx, x1 - min) : x0, top ? Math.min(ny, y1 - min) : y0,
-            left ? x1 : Math.max(nx, x0 + min), top ? y1 : Math.max(ny, y0 + min)];
+    d.to = [left ? Math.min(nx, x1 - minW) : x0, top ? Math.min(ny, y1 - minH) : y0,
+            left ? x1 : Math.max(nx, x0 + minW), top ? y1 : Math.max(ny, y0 + minH)];
     if (d.keepShape) {
       const k = Math.max((d.to[2] - d.to[0]) / (x1 - x0), (d.to[3] - d.to[1]) / (y1 - y0));
       const w = (x1 - x0) * k, hh = (y1 - y0) * k;
@@ -1716,7 +1843,7 @@ function undo() {
   // A size or sides change came from the order (Order options): undo stops there, so the design
   // can never drift from the size the calculator is pricing.
   if (S.undoDepth <= S.undoFloor) {
-    if (S.undoFloor > 0 || S.sizeChanged) toast('To change the size or sides, use Order options.');
+    if (S.sizeChanged) toast('To change the size or sides, use Order options.');
     return;
   }
   if (tryRun('edit.undo', {}) !== undefined) { S.dirty = true; S.canRedo = true; refresh(); }
@@ -1734,7 +1861,15 @@ document.addEventListener('keydown', e => {
   // A dialog open (the print check, My designs) has the keys: Delete or an arrow mustn't change the
   // design behind it.
   if (!el.sheet.hidden || !el.designs.hidden) {
-    if (e.key === 'Escape') { el.sheet.hidden = true; closeDesigns(); }
+    if (e.key === 'Escape') { el.sheet.hidden = true; closeDesigns(); return; }
+    if (e.key === 'Tab') {
+      // Tab goes round the dialog's own buttons, not out to the page behind it.
+      const box = !el.sheet.hidden ? el.sheet : el.designs;
+      const f = [...box.querySelectorAll('button, input, select, a[href]')].filter(x => !x.disabled && x.offsetParent !== null);
+      const i = f.indexOf(document.activeElement);
+      if (f.length && e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+      else if (f.length && !e.shiftKey && (i < 0 || i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
+    }
     return;
   }
   // Ctrl+S: save again under the name it was saved as, or open My designs to name it.
@@ -1756,7 +1891,11 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeColours(); if (S.mode === 'adv' && S.tool !== 'select') setTool('select'); select(null); return; }
   if (!S.sel) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeSelected(); return; }
-  if (e.key === 'Enter' && isText(selected())) { e.preventDefault(); openTextEditor(); return; }
+  // Enter presses a focused button (Bold, +, Print); it opens the words only when nothing else has
+  // the focus. It opened the text editor instead of pressing the button.
+  const ae = document.activeElement;
+  const onDesign = !ae || ae === document.body || ae === el.canvas || ae === document.documentElement;
+  if (e.key === 'Enter' && onDesign && isText(selected())) { e.preventDefault(); openTextEditor(); return; }
   const step = e.shiftKey ? 9 : 1;
   const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
   const it = selected();
@@ -1772,7 +1911,7 @@ $('sheetGo').addEventListener('click', doPrint);
 
 function allPages() {
   const ins = run('document.inspect');
-  return (ins.spreads || []).map(sp => (sp.items || []).filter(it => !it.hidden));
+  return (ins.spreads || []).map(sp => (sp.items || []).filter(it => !it.hidden && !(S.noPrint && S.noPrint.has(it.id))));
 }
 
 function openChecks() {
@@ -1782,14 +1921,14 @@ function openChecks() {
   const keep = S.page;
   const lines = docProblems().map(([m, severe]) => [severe ? 'stop' : 'warn', m]);
   spreads.forEach((all, i) => {
-    const items = all.filter(it => !it.hidden);
+    const items = all.filter(it => !it.hidden && !S.noPrint.has(it.id));
     S.page = i; S.items = items;
     const probs = [...new Set(items.flatMap(problemsOf))];
     if (!items.length) lines.push(['warn', sideName(i) + ' is blank. That\'s fine if you meant it to be.']);
     else if (probs.length) probs.forEach(p => lines.push([SEVERE.has(p) ? 'stop' : 'warn', sideName(i) + ': ' + p]));
     else lines.push(['ok', sideName(i) + ' looks ready.']);
     const hidden = all.length - items.length;
-    if (hidden) lines.push(['warn', sideName(i) + ': ' + hidden + (hidden === 1 ? ' hidden item' : ' hidden items') + ' won\'t print. Show it in Layers if it should.']);
+    if (hidden) lines.push(['warn', sideName(i) + ': ' + hidden + (hidden === 1 ? ' hidden or non-printing item' : ' hidden or non-printing items') + ' won\'t print. Show it in Layers if it should.']);
   });
   S.page = keep;
   readDocument();
@@ -1946,6 +2085,7 @@ function createDrawn(d) {
       S.style.set(id, { font: 'clean', bold: false, size: 12, align: 'left', colour: 'Black' });
       run('selection.set', { ids: [id] });
       run('type.char', { attrs: { fontFamily: FONTS.clean.family, fontStyle: 'Regular', size: 12, fill: '[Black]' } });
+      run('type.para', { attrs: { hyphenate: false } });
     } else if (d.tool === 'image') {
       id = run('frame.create', { spread: S.page, rect: b, content: 'graphic' }).id;
     } else {
@@ -2060,8 +2200,18 @@ function commitGeometry() {
   const x = num(el.ctlX), y = num(el.ctlY), w = num(el.ctlW), h = num(el.ctlH);
   if (x == null || y == null || w == null || h == null || w < 0 || h < 0) { updateControl(); return; }
   const thin = (a, b) => b - a < 1;   // a drawn line has no height (or width) of its own
-  const to = [x * 72, y * 72, x * 72 + (thin(x0, x1) && w < 0.02 ? x1 - x0 : Math.max(0.5, w * 72)),
-              y * 72 + (thin(y0, y1) && h < 0.02 ? y1 - y0 : Math.max(0.5, h * 72))];
+  let to = [x * 72, y * 72, x * 72 + (thin(x0, x1) && w < 0.02 ? x1 - x0 : Math.max(0.5, w * 72)),
+            y * 72 + (thin(y0, y1) && h < 0.02 ? y1 - y0 : Math.max(0.5, h * 72))];
+  // A turned item's W and H are its bounding box: stretching that one way skews it. A new W (or H)
+  // scales it evenly, as the corner handles do.
+  let turned = false;
+  try { turned = Math.abs(((run('transform.info', { ids: [it.id] }) || {}).rotation || 0) % 90) > 0.01; } catch { /* square-on */ }
+  if (turned) {
+    const ow = x1 - x0, oh = y1 - y0;
+    const k = Math.abs(w * 72 - ow) > 0.01 ? (w * 72) / ow : Math.abs(h * 72 - oh) > 0.01 ? (h * 72) / oh : 1;
+    if (!(k > 0) || !Number.isFinite(k)) { updateControl(); return; }
+    to = [x * 72, y * 72, x * 72 + ow * k, y * 72 + oh * k];
+  }
   if (to.every((v, i) => Math.abs(v - it.bounds[i]) < 0.01)) return;
   try {
     run('transform.resize', { from: it.bounds, to, content: false, ids: [it.id] });

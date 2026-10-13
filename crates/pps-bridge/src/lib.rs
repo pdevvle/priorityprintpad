@@ -14,10 +14,14 @@
 //! [`Designer`] only converts its errors into JavaScript exceptions.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
+use designcraft_doc::Document;
 use designcraft_engine::Session;
-use designcraft_render::Renderer;
+use designcraft_render::{RenderOptions, Renderer};
 use serde_json::{Value, json};
 use wasm_bindgen::prelude::*;
 
@@ -56,6 +60,9 @@ pub struct Rendered {
 pub struct Bridge {
     session: Session,
     renderer: Renderer,
+    /// The document as it was when the customer's current action began ([`Bridge::begin_step`]),
+    /// and the undo history's length then.
+    step: Option<(Arc<Document>, usize)>,
 }
 
 impl Default for Bridge {
@@ -69,7 +76,54 @@ impl Bridge {
         let mut renderer = Renderer::new();
         // The browser gives wasm no threads; render on the calling one.
         renderer.threads = 0;
-        Bridge { session: Session::new(), renderer }
+        Bridge { session: Session::new(), renderer, step: None }
+    }
+
+    /// Start one customer action. Adding a heading is several engine commands (create the frame,
+    /// set its type, its alignment, fit it), each its own undo entry: one Undo then left a state
+    /// the customer never made. [`Bridge::end_step`] folds them into one entry.
+    pub fn begin_step(&mut self) {
+        self.step = self.session.doc().ok().map(|st| (st.doc.clone(), st.history.undo.len()));
+    }
+
+    /// End the action begun by [`Bridge::begin_step`]: every undo entry it added becomes one, which
+    /// restores the document as it was before the action. The engine records an entry only when a
+    /// command changed the document, holding the document as it was before that command, so the
+    /// action's first entry is the one whose document is the one the action began with.
+    pub fn end_step(&mut self) {
+        let Some((before, len)) = self.step.take() else { return };
+        let Ok(st) = self.session.doc_mut() else { return };
+        let limit = st.history.limit.max(1);
+        let undo = &mut st.history.undo;
+        let first = if undo.get(len).is_some_and(|e| Arc::ptr_eq(&e.doc, &before)) {
+            Some(len)
+        } else if undo.len() >= limit {
+            // At the history's limit the oldest entries were dropped, so the action's first entry
+            // moved down: find it among the last few.
+            undo.iter().enumerate().skip(len.saturating_sub(64)).rev().find(|(_, e)| Arc::ptr_eq(&e.doc, &before)).map(|(i, _)| i)
+        } else {
+            None
+        };
+        if let Some(i) = first {
+            undo.truncate(i + 1);
+        }
+    }
+
+    /// Items on the pages that won't print: on a hidden or non-printing layer, or marked
+    /// Nonprinting (an InDesign file can have all three). The canvas leaves them out, as the PDF does.
+    pub fn not_printing(&self) -> Result<Value, String> {
+        let d = &self.session.doc().map_err(|e| format!("notPrinting: {e}"))?.doc;
+        let mut out = Vec::new();
+        for sp in &d.spreads {
+            for top in &sp.items {
+                top.walk(&mut |it| {
+                    if it.nonprinting || d.layer(it.layer).is_some_and(|l| !l.visible || !l.printable) {
+                        out.push(it.id.0);
+                    }
+                });
+            }
+        }
+        Ok(json!(out))
     }
 
     /// Run one engine command. `params` is a JSON object (or empty for none).
@@ -103,9 +157,12 @@ impl Bridge {
             return Err(format!("renderPage: {px:.0} pixels is more than this preview allows"));
         }
         let cache = self.session.cache.clone();
+        // What prints, and only that: non-printing layers and objects are left out, as in the PDF.
+        // (They were drawn, so the customer saw things on the design that never reached paper.)
+        let opts = RenderOptions { printing_only: true, ..Default::default() };
         let out = self
             .renderer
-            .render_page(&doc, &cache, page, scale, bleed, &Default::default())
+            .render_page(&doc, &cache, page, scale, bleed, &opts)
             .ok_or_else(|| format!("renderPage: there is no page {page}"))?;
         Ok(Rendered { width: out.width, height: out.height, rgba: out.to_straight() })
     }
@@ -128,9 +185,16 @@ impl Bridge {
 
     /// The design in DesignCraft's native format, base64-encoded so it travels as a plain string
     /// (postMessage, storage) and Back or reopening keeps the work. The format is binary.
+    ///
+    /// As `file.serialize` writes it, less the photos nothing in the design uses any more: every
+    /// photo ever placed stayed in the file, so four Replace actions made a 3 MB design 15 MB, kept
+    /// after the photo was deleted, and every save, autosave and reopen carried them.
     pub fn save_design(&mut self) -> Result<String, String> {
-        let r = self.session.execute("file.serialize", &json!({})).map_err(|e| format!("saveDesign: {e}"))?;
-        r.get("base64").and_then(Value::as_str).map(str::to_string).ok_or_else(|| "saveDesign: the engine returned nothing".into())
+        let st = self.session.doc().map_err(|e| format!("saveDesign: {e}"))?;
+        // Preview fill is session state: the unfilled template is what is saved (as file.serialize).
+        let doc = st.preview_stash.as_deref().unwrap_or(st.doc.as_ref());
+        let bytes = designcraft_format::save(&without_unused_assets(doc)).map_err(|e| format!("saveDesign: {e}"))?;
+        Ok(B64.encode(bytes))
     }
 
     /// Open a design saved by [`Bridge::save_design`] (base64) as the current document.
@@ -175,6 +239,38 @@ impl Bridge {
         let params = json!({"base64": B64.encode(bytes), "name": if name.is_empty() { "image".to_string() } else { name }, "frame": frame});
         self.session.execute("file.place", &params).map_err(|e| format!("placeImage: {e}"))
     }
+}
+
+/// `doc` without the assets (placed photos and files) nothing in it refers to. Whether an asset is
+/// used is read from the document's own serialised form with the assets left out: any number in it
+/// equal to an asset's id is a reference. That counts every kind (frames, media posters, anchored
+/// objects, table cells) without listing them, so none can be missed; ids are unique across a
+/// document, so a number that merely matches can only keep an asset, never lose one.
+fn without_unused_assets(doc: &Document) -> Document {
+    let mut d = doc.clone();
+    if d.assets.is_empty() {
+        return d;
+    }
+    let mut probe = doc.clone();
+    probe.assets.clear();
+    let Ok(v) = serde_json::to_value(&probe) else { return d };
+    let ids: BTreeSet<u64> = doc.assets.keys().map(|k| k.0).collect();
+    let mut used = BTreeSet::new();
+    let mut stack = vec![&v];
+    while let Some(v) = stack.pop() {
+        match v {
+            Value::Number(n) => {
+                if let Some(u) = n.as_u64().filter(|u| ids.contains(u)) {
+                    used.insert(u);
+                }
+            }
+            Value::Array(a) => stack.extend(a.iter()),
+            Value::Object(o) => stack.extend(o.values()),
+            _ => {}
+        }
+    }
+    d.assets.retain(|k, _| used.contains(&k.0));
+    d
 }
 
 /// The JavaScript face of [`Bridge`]: `new Designer()`, then commands, renders and exports.
@@ -254,6 +350,23 @@ impl Designer {
     #[wasm_bindgen(js_name = placeImage)]
     pub fn place_image(&mut self, bytes: &[u8], name: &str, frame: u32) -> Result<String, JsError> {
         self.inner.place_image(bytes, name, u64::from(frame)).map(|v| v.to_string()).map_err(js)
+    }
+
+    /// Begin one customer action: its commands become one undo step at `endStep`.
+    #[wasm_bindgen(js_name = beginStep)]
+    pub fn begin_step(&mut self) {
+        self.inner.begin_step();
+    }
+
+    #[wasm_bindgen(js_name = endStep)]
+    pub fn end_step(&mut self) {
+        self.inner.end_step();
+    }
+
+    /// Ids of the items on the pages that won't print (JSON array).
+    #[wasm_bindgen(js_name = notPrinting)]
+    pub fn not_printing(&self) -> Result<String, JsError> {
+        self.inner.not_printing().map(|v| v.to_string()).map_err(js)
     }
 }
 
@@ -349,5 +462,90 @@ mod tests {
         let png = B64.decode("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAEElEQVR4nGP4z8DAwMDAAAAP/wH/YrJcGQAAAABJRU5ErkJggg==").unwrap();
         let r = b.place_image(&png, "dot.png", id).unwrap();
         assert!(r.get("asset").is_some(), "{r}");
+    }
+
+    fn dot_png() -> Vec<u8> {
+        B64.decode("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAEElEQVR4nGP4z8DAwMDAAAAP/wH/YrJcGQAAAABJRU5ErkJggg==").unwrap()
+    }
+
+    #[test]
+    fn a_step_is_one_undo_entry_that_restores_the_design_before_it() {
+        let mut b = postcard();
+        let before = b.session.doc().unwrap().history.undo.len();
+        b.begin_step();
+        let f = b.execute("frame.create", r#"{"spread":0,"rect":[10,10,100,100],"content":"unassigned","shape":"rectangle"}"#).unwrap();
+        let id = f["id"].as_u64().unwrap();
+        b.execute("object.fill", &format!(r#"{{"swatch":"[Black]","ids":[{id}]}}"#)).unwrap();
+        b.execute("object.stroke", &format!(r#"{{"swatch":"[None]","ids":[{id}]}}"#)).unwrap();
+        b.end_step();
+        assert_eq!(b.session.doc().unwrap().history.undo.len(), before + 1, "three commands, one entry");
+        b.execute("edit.undo", "{}").unwrap();
+        let items = b.execute("document.inspect", "{}").unwrap()["spreads"][0]["items"].as_array().unwrap().len();
+        assert_eq!(items, 0, "one Undo takes the whole action back");
+        // A step with no change leaves the history alone; an undo inside one stays an undo.
+        b.execute("edit.redo", "{}").unwrap();
+        let n = b.session.doc().unwrap().history.undo.len();
+        b.begin_step();
+        b.execute("document.inspect", "{}").unwrap();
+        b.end_step();
+        assert_eq!(b.session.doc().unwrap().history.undo.len(), n);
+        b.begin_step();
+        b.execute("edit.undo", "{}").unwrap();
+        b.end_step();
+        assert_eq!(b.session.doc().unwrap().history.undo.len(), n - 1);
+        b.end_step(); // no step open: nothing happens
+    }
+
+    #[test]
+    fn a_saved_design_leaves_out_photos_nothing_uses() {
+        let mut b = postcard();
+        let f = b.execute("frame.create", r#"{"spread":0,"rect":[0,0,200,100],"content":"graphic"}"#).unwrap();
+        let id = f["id"].as_u64().unwrap();
+        let g = b.execute("frame.create", r#"{"spread":1,"rect":[0,0,200,100],"content":"graphic"}"#).unwrap();
+        let gid = g["id"].as_u64().unwrap();
+        // Replaced twice, and a second frame with its own photo.
+        for _ in 0..3 {
+            b.place_image(&dot_png(), "dot.png", id).unwrap();
+        }
+        b.place_image(&dot_png(), "back.png", gid).unwrap();
+        assert_eq!(b.session.doc().unwrap().doc.assets.len(), 4);
+        let saved = b.save_design().unwrap();
+        let mut c = Bridge::new();
+        c.open_design(&saved).unwrap();
+        let d = &c.session.doc().unwrap().doc;
+        assert_eq!(d.assets.len(), 2, "the two photos in use, not the two replaced");
+        let mut frames = 0;
+        for sp in &d.spreads {
+            for it in &sp.items {
+                if let designcraft_doc::Content::Graphic(g) = &it.content {
+                    frames += 1;
+                    assert!(d.assets.contains_key(&g.asset), "every photo frame still has its photo");
+                }
+            }
+        }
+        assert_eq!(frames, 2);
+        // Nothing placed: nothing to leave out, and the design still saves.
+        assert!(postcard().save_design().is_ok());
+    }
+
+    #[test]
+    fn what_wont_print_is_named_and_not_drawn() {
+        let mut b = postcard();
+        let f = b.execute("frame.create", r#"{"spread":0,"rect":[0,0,648,432],"content":"unassigned","shape":"rectangle"}"#).unwrap();
+        let id = f["id"].as_u64().unwrap();
+        b.execute("object.fill", &format!(r#"{{"swatch":"[Black]","ids":[{id}]}}"#)).unwrap();
+        assert_eq!(b.not_printing().unwrap(), json!([]));
+        let dark = |b: &mut Bridge| b.render_page(0, 0.25, false).unwrap().rgba.chunks(4).filter(|p| p[0] < 128).count();
+        assert!(dark(&mut b) > 1000, "a printing black box is drawn");
+        b.session
+            .edit(|d, _| {
+                if let Some(l) = d.layers.first_mut() {
+                    l.printable = false;
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(b.not_printing().unwrap(), json!([id]));
+        assert_eq!(dark(&mut b), 0, "on a non-printing layer it isn't drawn, as it isn't printed");
     }
 }
