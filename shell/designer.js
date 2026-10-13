@@ -1558,7 +1558,8 @@ async function renderSavedList() {
   }
   for (const m of metas) {
     const li = document.createElement('li');
-    const current = m.id === S.autoId || m.id === S.savedId;
+    // The one the design is open from: its named save if it has one, else its automatic save.
+    const current = m.id === (S.savedId || S.autoId);
     li.classList.toggle('current', current);
     const img = document.createElement('img'); img.alt = ''; if (m.thumb) img.src = m.thumb;
     const info = document.createElement('div');

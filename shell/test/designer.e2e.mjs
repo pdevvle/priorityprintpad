@@ -702,14 +702,15 @@ const errors = [];
   // Save by name, list it, download it, delete one.
   await page.click('#railSave');
   ok('My designs opens, naming the design for the product', await page.isVisible('#designs') && /^Postcard design, /.test(await page.inputValue('#saveName')), await page.inputValue('#saveName'));
-  ok('…and lists the automatic save as the one open now', /Saved automatically \(open now\)/.test(await page.textContent('#savedList')));
+  await page.waitForFunction(() => /Saved automatically/.test(document.getElementById('savedList').textContent), null, { timeout: 5000 }).catch(() => {});
+  ok('…and lists the automatic save as the one open now', /Saved automatically \(open now\)/.test(await page.textContent('#savedList')), await page.textContent('#savedList'));
   await page.fill('#saveName', 'Spring card');
   await page.click('#saveHere');
   const t2 = await toastText();
   ok('Save keeps it by name', /Saved “Spring card”/.test(t2), t2);
   await page.waitForFunction(() => document.querySelectorAll('#savedList li').length === 2, null, { timeout: 5000 }).catch(() => {});
   const listed = await page.locator('#savedList li').allTextContents();
-  ok('…and it is listed with its size and sides', listed.some(t => /Spring card/.test(t) && /9 × 6 in, 2 sides/.test(t)), JSON.stringify(listed));
+  ok('…and it is listed with its size and sides, as the one open now', listed.some(t => /Spring card \(open now\)/.test(t) && /9 × 6 in, 2 sides/.test(t)) && !listed.some(t => /Saved automatically \(open now\)/.test(t)), JSON.stringify(listed));
   const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.click('#saveDownload')]);
   const file = await readFile(await dl.path());
   ok('Download a copy gives a .ppsdesign file named after the design', dl.suggestedFilename() === 'Spring card.ppsdesign' && file.subarray(0, 2).toString() === 'PK', dl.suggestedFilename());
