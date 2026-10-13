@@ -27,7 +27,8 @@ prices, uploads or touches the cart.
   from the right. `shell/test/designer.e2e.mjs SITE_DIR` drives all of it in headless Chromium;
   CI runs it.
 - `shell/HANDSHAKE.md`: the `pps-design:*` messages with the calculators, including the Order
-  options ones added after the brief's §6.
+  options ones added after the brief's §6, and how designs are kept in the browser (My designs:
+  saved automatically, saved by name, downloaded as `.ppsdesign` and opened again).
 - `shell/bundle.mjs`: packs a build into the store's release, `pps-designer-<sha>.html` (everything
   inline) plus `pps-designer-<sha>.wasm.gz`. Two files, because the store's deploy tool writes only
   into folders that already exist. CI runs the e2e on the bundle too; `wasm.yml`'s `release` job

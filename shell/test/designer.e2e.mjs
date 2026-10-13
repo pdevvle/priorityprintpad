@@ -126,6 +126,11 @@ function inflatedText(pdf) {
   return parts.join('\n');
 }
 
+// Images drawn in a PDF (its image XObjects).
+const imageCount = pdf => (pdf.toString('latin1').match(/\/Subtype\s*\/Image\b/g) || []).length;
+// The PDF's first MediaBox, rounded.
+const mediaBox = pdf => { const m = /\/MediaBox\s*\[([^\]]+)\]/.exec(pdf.toString('latin1')); return m ? m[1].trim().split(/\s+/).map(v => Math.round(+v)) : null; };
+
 // The type sizes a PDF sets (its Tf operators), distinct and sorted.
 const tfSizes = pdf => [...new Set((contentStreams(pdf).join('\n').match(/[\d.]+ Tf\b/g) || []).map(t => +parseFloat(t).toFixed(2)))].sort((a, b) => a - b);
 
@@ -156,8 +161,8 @@ const errors = [];
   const k = await page.evaluate(() => parseFloat(getComputedStyle(document.getElementById('canvas')).width) / (648 + 18));
   const at = (x, y) => [box.x + (x + 9) * k, box.y + (y + 9) * k];
 
-  ok('four things to add, Canva-style', (await page.locator('.railbtn').allTextContents()).map(t => t.trim()).join(',') === 'Text,Photos,Shapes,Background');
-  ok('the main buttons explain themselves (tooltips)', (await page.locator('.railbtn[data-tip], #print[data-tip], #undo[data-tip]').count()) === 6);
+  ok('four things to add, Canva-style, and My designs', (await page.locator('.railbtn').allTextContents()).map(t => t.trim()).join(',') === 'Text,Photos,Shapes,Background,My designs');
+  ok('the main buttons explain themselves (tooltips)', (await page.locator('.railbtn[data-tip], #print[data-tip], #undo[data-tip]').count()) === 7);
   ok('an empty design says where to start', await page.isVisible('#emptyHint'));
   await page.click('[data-text="heading"]');
   ok('adding a heading selects it and opens the text toolbar', await page.isVisible('#ctxText'));
@@ -643,6 +648,180 @@ const errors = [];
   const toastShown = await page.isVisible('#toast');
   ok('a 24 × 36 in poster zoomed in is still drawn', !toastShown && !logged.some(t => /render|preview/i.test(t)), (await page.textContent('#toast')) + ' ' + logged.join(' | ').slice(0, 200));
   await ctx.close();
+}
+
+// ── saving designs to come back to (My designs) ──
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, acceptDownloads: true });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(String(e.message || e)));
+  let answer = true;
+  page.on('dialog', d => (answer ? d.accept() : d.dismiss()));
+  const ready = () => page.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  const toastText = async () => { await page.waitForSelector('#toast:not([hidden])', { timeout: 15000 }); const t = await page.textContent('#toast'); await page.evaluate(() => { document.getElementById('toast').hidden = true; }); return t; };
+  const printPdf = async () => {
+    await page.click('#print');
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#sheetGo')]);
+    await page.evaluate(() => { document.getElementById('toast').hidden = true; });
+    return readFile(await dl.path());
+  };
+  const records = () => page.evaluate(() => new Promise(res => {
+    const r = indexedDB.open('pps-designer', 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore('meta', { keyPath: 'id' }); r.result.createObjectStore('data'); };
+    r.onsuccess = () => { const q = r.result.transaction('meta').objectStore('meta').getAll(); q.onsuccess = () => { res(q.result.map(m => ({ id: m.id, auto: m.auto, name: m.name, w: m.w, h: m.h, pages: m.pages, product: m.product, hash: m.hash }))); r.result.close(); }; };
+  }));
+  const waitAuto = async n => { for (let i = 0; i < 40; i++) { if ((await records()).filter(m => m.auto).length >= n) return true; await page.waitForTimeout(250); } return false; };
+
+  await page.goto(BASE + 'designer.html?product=Postcard');
+  await ready();
+  ok('a first visit offers nothing to carry on with', await page.isHidden('#resume'));
+  // The photo first, so the heading added after it is on top where the test clicks.
+  await page.click('.railbtn[data-cat="photos"]');
+  await page.setInputFiles('#photoPick', path.join(HERE, 'fixtures', 'phone-exif6.jpg'));
+  await page.waitForTimeout(800);
+  await page.click('.railbtn[data-cat="text"]');
+  await page.click('[data-text="heading"]');
+  await page.fill('#textInput', 'Keep me safe');
+  await page.click('#textDone');
+  ok('the design is saved automatically as it is made', await waitAuto(1), JSON.stringify(await records()));
+  const auto1 = (await records()).filter(m => m.auto);
+  ok('…as one record, for this product and size', auto1.length === 1 && auto1[0].product === 'Postcard' && auto1[0].w === 648 && auto1[0].pages === 2, JSON.stringify(auto1));
+
+  // Reload: offered back, and it comes back whole.
+  await page.reload();
+  await ready();
+  await page.waitForSelector('#resume:not([hidden])', { timeout: 10000 }).catch(() => {});
+  ok('after a reload the design is offered back', /Carry on with your last design/.test(await page.textContent('#resume')), await page.textContent('#resume'));
+  await page.click('#resumeOpen');
+  const t1 = await toastText();
+  ok('…and opens', /^Opened your saved design/.test(t1), t1);
+  let pdf = await printPdf();
+  ok('…with its words and photo in the print file', tfSizes(pdf).includes(54) && imageCount(pdf) >= 1, JSON.stringify(tfSizes(pdf)) + ' images ' + imageCount(pdf));
+  ok('carrying on keeps the one automatic record (no copy per visit)', (await records()).filter(m => m.auto).length === 1);
+
+  // Save by name, list it, download it, delete one.
+  await page.click('#railSave');
+  ok('My designs opens, naming the design for the product', await page.isVisible('#designs') && /^Postcard design, /.test(await page.inputValue('#saveName')), await page.inputValue('#saveName'));
+  ok('…and lists the automatic save as the one open now', /Saved automatically \(open now\)/.test(await page.textContent('#savedList')));
+  await page.fill('#saveName', 'Spring card');
+  await page.click('#saveHere');
+  const t2 = await toastText();
+  ok('Save keeps it by name', /Saved “Spring card”/.test(t2), t2);
+  await page.waitForFunction(() => document.querySelectorAll('#savedList li').length === 2, null, { timeout: 5000 }).catch(() => {});
+  const listed = await page.locator('#savedList li').allTextContents();
+  ok('…and it is listed with its size and sides', listed.some(t => /Spring card/.test(t) && /9 × 6 in, 2 sides/.test(t)), JSON.stringify(listed));
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.click('#saveDownload')]);
+  const file = await readFile(await dl.path());
+  ok('Download a copy gives a .ppsdesign file named after the design', dl.suggestedFilename() === 'Spring card.ppsdesign' && file.subarray(0, 2).toString() === 'PK', dl.suggestedFilename());
+  // Keys go to the dialog: Delete mustn't delete what is selected behind it.
+  await page.keyboard.press('Escape');
+  const bx = await page.locator('#canvas').boundingBox();
+  const kk = bx.width / (648 + 18);
+  await page.mouse.click(bx.x + (324 + 9) * kk, bx.y + (9 + 0.3 * 414 + 9) * kk);
+  const before = await page.evaluate(() => document.querySelectorAll('#warnings div').length);
+  await page.click('#railSave');
+  await page.keyboard.press('Delete');
+  await page.keyboard.press('Escape');
+  ok('Delete with My designs open leaves the design alone', await page.isVisible('#ctxText'), await page.textContent('#ctxHint'));
+  await page.click('#railSave');
+  const autoRow = page.locator('#savedList li', { hasText: 'Saved automatically' });
+  await autoRow.locator('button', { hasText: 'Delete' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('#savedList li').length === 1, null, { timeout: 5000 }).catch(() => {});
+  ok('Delete takes a design out of the list', (await records()).length === 1 && (await records())[0].name === 'Spring card', JSON.stringify(await records()));
+  await page.click('#designsClose');
+  void before;
+
+  // Ctrl+S saves again under its name.
+  await page.click('[data-text="body"]');
+  await page.fill('#textInput', 'Saturday 10 to 4');
+  await page.keyboard.press('Control+s');
+  const t3 = await toastText();
+  ok('Ctrl+S saves again under the name it has', /Saved “Spring card”/.test(t3) && (await records()).filter(m => !m.auto).length === 1, t3);
+
+  // Opacity is read back from the design: an undone change isn't remembered, a reopened one is.
+  await page.click('#modeAdv');
+  await page.waitForTimeout(300);
+  const b2 = await page.locator('#canvas').boundingBox();
+  const k2 = b2.width / (648 + 18);
+  await page.mouse.click(b2.x + (324 + 9) * k2, b2.y + (9 + 0.3 * 414 + 9) * k2);
+  await page.fill('#ctlTracking', '-200'); await page.press('#ctlTracking', 'Enter');
+  await page.fill('#ctlOpacity', '50'); await page.press('#ctlOpacity', 'Enter');
+  await page.evaluate(() => document.activeElement.blur());
+  await page.waitForTimeout(200);
+  const faded = async () => { await page.click('#print'); const l = await page.locator('#checks li.stop').allTextContents(); await page.click('#sheetCancel'); return l.some(t => /Faded text/.test(t)); };
+  ok('faded tight text is flagged', await faded());
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(200);
+  ok('…and not once the opacity change is undone', !(await faded()));
+  ok('…the Control bar reads 100% again', (await page.inputValue('#ctlOpacity')) === '100', await page.inputValue('#ctlOpacity'));
+  await page.keyboard.press('Control+Shift+z');
+  await page.waitForTimeout(200);
+  ok('…and flagged again on redo', await faded());
+  await page.keyboard.press('Control+s');
+  await toastText();
+  await page.reload();
+  await ready();
+  await page.click('#toolSave');
+  await page.locator('#savedList li', { hasText: 'Spring card' }).locator('button', { hasText: 'Open' }).click();
+  await toastText();
+  ok('a reopened design still has faded tight text flagged', await faded());
+  await page.click('#modeSimple');
+  await ctx.close();
+
+  // On another device (fresh storage), at another size: the downloaded file opens, fitted to the order.
+  const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 860 }, acceptDownloads: true });
+  const p2 = await ctx2.newPage();
+  p2.on('pageerror', e => errors.push(String(e.message || e)));
+  let ans2 = false;
+  p2.on('dialog', d => (ans2 ? d.accept() : d.dismiss()));
+  await p2.goto(BASE + 'designer.html?product=Postcard&w=6&h=4&pages=2');
+  await p2.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 120000 });
+  await p2.setInputFiles('#filePick', { name: 'Spring card.ppsdesign', mimeType: 'application/octet-stream', buffer: file });
+  await p2.waitForTimeout(500);
+  ok('a design of another size asks first; Cancel leaves the page as it was', await p2.isVisible('#emptyHint'));
+  ans2 = true;
+  await p2.setInputFiles('#filePick', { name: 'Spring card.ppsdesign', mimeType: 'application/octet-stream', buffer: file });
+  await p2.waitForSelector('#toast:not([hidden])', { timeout: 15000 });
+  ok('OK fits it to the order and says it opened', /^Opened Spring card\.ppsdesign/.test(await p2.textContent('#toast')), await p2.textContent('#toast'));
+  await p2.click('#print');
+  const [dl2] = await Promise.all([p2.waitForEvent('download', { timeout: 60000 }), p2.click('#sheetGo')]);
+  const pdf2 = await readFile(await dl2.path());
+  ok('…and it prints at the order\'s size, scaled (6 × 4 in: 450 × 306 pt, the 54 pt heading at 36 pt)', JSON.stringify(mediaBox(pdf2)) === '[0,0,450,306]' && tfSizes(pdf2).includes(36) && imageCount(pdf2) >= 1, JSON.stringify(mediaBox(pdf2)) + ' ' + JSON.stringify(tfSizes(pdf2)));
+  await p2.evaluate(() => { document.getElementById('toast').hidden = true; });
+  await p2.setInputFiles('#filePick', { name: 'notes.ppsdesign', mimeType: 'application/octet-stream', buffer: Buffer.from('not a design at all') });
+  await p2.waitForSelector('#toast:not([hidden])', { timeout: 10000 });
+  ok('a file that isn\'t a design is said so, and the design stays', /couldn't be opened/.test(await p2.textContent('#toast')) && !(await p2.isVisible('#emptyHint')), await p2.textContent('#toast'));
+  await ctx2.close();
+
+  // Embedded: Back and Edit design carry on in one automatic record; a reload of the order page offers it.
+  const ctx3 = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const p3 = await ctx3.newPage();
+  p3.on('pageerror', e => errors.push(String(e.message || e)));
+  p3.on('dialog', d => d.accept());
+  await p3.goto(BASE + '__host.html');
+  const f3 = p3.frameLocator('#f');
+  await f3.locator('#print:not([disabled])').waitFor({ timeout: 120000 });
+  await f3.locator('[data-text="heading"]').click();
+  await f3.locator('#textInput').fill('Order page design');
+  await f3.locator('#textDone').click();
+  await f3.locator('#back').click();
+  await p3.waitForFunction(() => window.got.some(m => m.type === 'pps-design:close'), null, { timeout: 10000 });
+  const recs3 = async () => p3.frames()[1].evaluate(() => new Promise(res => { const r = indexedDB.open('pps-designer', 1); r.onsuccess = () => { const q = r.result.transaction('meta').objectStore('meta').getAll(); q.onsuccess = () => { res(q.result.filter(m => m.auto).length); r.result.close(); }; }; }));
+  ok('Back saves the design here before handing it over', (await recs3()) === 1);
+  for (let i = 0; i < 2; i++) {
+    await p3.evaluate(() => document.getElementById('f').contentWindow.postMessage({ type: 'pps-design:job', v: 1, spec: { trimW: 432, trimH: 288, bleed: 9, safety: 9, pages: 2, pageMultiple: 2 }, design: window.lastDesign }, location.origin));
+    await p3.waitForTimeout(600);
+    await f3.locator('[data-text="body"]').click();
+    await f3.locator('#textDone').click();
+    await f3.locator('#back').click();
+    await p3.waitForFunction(n => window.got.filter(m => m.type === 'pps-design:close').length === n, i + 2, { timeout: 10000 });
+  }
+  ok('Edit design and Back, twice, keep one automatic record (not one per visit)', (await recs3()) === 1, String(await recs3()));
+  await p3.reload();
+  await f3.locator('#print:not([disabled])').waitFor({ timeout: 120000 });
+  await f3.locator('#resume:not([hidden])').waitFor({ timeout: 10000 }).catch(() => {});
+  ok('a reloaded order page offers the design back in the designer', /Carry on with your last design/.test(await f3.locator('#resume').textContent()));
+  await ctx3.close();
 }
 
 // ── embedded in a calculator (handshake, brief §6) ──

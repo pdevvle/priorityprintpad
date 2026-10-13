@@ -75,6 +75,7 @@ const el = {
   pagesList: $('pagesList'), layersList: $('layersList'), swatchList: $('swatchList'), swatchNew: $('swatchNew'), alignTo: $('alignTo'),
   fsFill: $('fsFill'), fsStroke: $('fsStroke'), zoomPct: $('zoomPct'),
   orderTab: $('orderTab'), orderPanel: $('orderPanel'), orderPrice: $('orderPrice'), orderFields: $('orderFields'),
+  resume: $('resume'), resumeMsg: $('resumeMsg'), designs: $('designs'), savedList: $('savedList'), saveName: $('saveName'), savedNote: $('savedNote'),
 };
 
 const S = {
@@ -103,12 +104,21 @@ const S = {
   fsTarget: 'fill',      // Swatches panel: fill or stroke
   allItems: [],          // current page's items including hidden ones (Layers panel)
   swatches: [],          // the document's swatch names
-  opacity: new Map(),    // item id → opacity %, when set here
+  opacity: new Map(),    // item id → opacity % last set or read here: a hint for reading it back (opacityPct)
+  opaque: new Set(),     // ids of items at 100% opacity, read from the engine at each refresh
   options: [],           // Order options from the calculator: [{key, label, type, value, choices?, min?, max?, step?, help?}]
   lastOption: null,      // {key, prev}: the change waiting on the calculator, to put back if refused
   price: null,           // the last price the calculator sent (display only)
   undoFloor: 0,          // undo history length when the order's size last changed: undo stops there
   undoDepth: 0,
+  product: 'Postcard',   // from the page's ?product=, as the calculator opens it
+  docGen: 0,             // bumped whenever a different document replaces the open one (job, file, resize)
+  autoId: null,          // the automatic-save record this design is kept in (My designs)
+  autoKey: null,         // docKey() when the design was last saved automatically (or opened)
+  autoHash: null,        // hashOf() the design string in that record
+  savedId: null,         // the named save this design was opened from or last saved as
+  savedName: '',
+  storageOff: false,     // this browser keeps nothing (storage blocked): saving is download only
 };
 
 // ── the bridge ────────────────────────────────────────────────
@@ -124,6 +134,7 @@ function tryRun(command, params, failMsg) {
 }
 
 function changed() {
+  el.resume.hidden = true;
   S.dirty = true;
   S.canRedo = false;
   S.editStamp = (S.editStamp || 0) + 1;
@@ -227,7 +238,7 @@ const sameGuides = (a, b) => JSON.stringify([a.folds, a.perfs, a.panelLabels]) =
 const linesOn = (k, page) => (S.spec[k] || []).filter(g => g.page === page);
 
 function resetLocalState() {
-  S.style.clear(); S.colour.clear(); S.imagePx.clear(); S.swatchNames.clear(); S.sel = null; S.page = 0;
+  S.style.clear(); S.colour.clear(); S.imagePx.clear(); S.swatchNames.clear(); S.opacity.clear(); S.opaque.clear(); S.sel = null; S.page = 0;
   clearTimeout(textTimer); textTimer = 0; S.editId = null; el.textEditor.hidden = true;
 }
 
@@ -258,34 +269,44 @@ function startJob(job) {
   // The calculator owns the size. A design saved at another size or page count (the order
   // changed since it was made) is resized to this one, never printed at its own.
   if (opened) {
-    const ins = run('document.inspect'), st = ins.settings || {};
-    const fits = (a, b) => Math.abs(a - b) < 0.01;
-    if (!fits(st.pageWidth, S.spec.w) || !fits(st.pageHeight, S.spec.h) || ins.pageCount !== S.spec.pages) {
-      const want = S.spec;
-      const dropped = (ins.spreads || []).slice(want.pages).some(sp => (sp.items || []).length);
-      S.spec = { ...want, w: st.pageWidth, h: st.pageHeight, pages: ins.pageCount };
-      try {
-        resizeDocument(want);
-        if (dropped) toast('This order now prints ' + (want.pages === 1 ? 'one side' : want.pages + ' sides') + ', so the rest of your earlier design was left out. Change the order back to keep it.', 9000);
-      }
-      catch (e) {
-        console.error(e);
-        S.spec = want;
-        keepOnly(run('file.new', { width: want.w, height: want.h, pages: want.pages, facingPages: false, bleed: want.bleed, margins: want.safety, title: el.productName.textContent }).index);
-        S.dirty = false;
-        toast('Your earlier design was made for a different size and could not be resized, so this is a fresh start.', 8000);
-      }
+    const want = S.spec;
+    try {
+      if (fitOpenedToOrder(want).dropped) toast(droppedMsg(want), 9000);
+    } catch (e) {
+      console.error(e);
+      keepOnly(run('file.new', { width: want.w, height: want.h, pages: want.pages, facingPages: false, bleed: want.bleed, margins: want.safety, title: el.productName.textContent }).index);
+      S.dirty = false;
+      toast('Your earlier design was made for a different size and could not be resized, so this is a fresh start.', 8000);
     }
   }
+  S.docGen++;
+  S.autoId = null; S.autoHash = null; S.savedId = null; S.savedName = '';
   layout();
+  S.autoKey = docKey();
   if (lostDesign) toast('Your earlier design couldn\'t be reopened, so this is a fresh start. Sorry about that.', 9000);
+  // Reopened from the calculator (Edit design): carry on in the automatic save it came from. A
+  // fresh start: offer the design saved last time, if there is one.
+  if (opened && !lostDesign) adoptAutosave(job.design); else offerResume();
 }
+
+// A design opened at another size or page count than the order is resized to the order (the
+// calculator owns the size). Says whether a side with a design on it was left out.
+function fitOpenedToOrder(want) {
+  const ins = run('document.inspect'), st = ins.settings || {};
+  const fits = (a, b) => Math.abs(a - b) < 0.01;
+  if (fits(st.pageWidth, want.w) && fits(st.pageHeight, want.h) && ins.pageCount === want.pages) return { resized: false, dropped: false };
+  const dropped = (ins.spreads || []).slice(want.pages).some(sp => (sp.items || []).length);
+  S.spec = { ...want, w: st.pageWidth, h: st.pageHeight, pages: ins.pageCount };
+  S.resizeBase = null;
+  try { resizeDocument(want); } catch (e) { S.spec = want; throw e; }
+  return { resized: true, dropped };
+}
+const droppedMsg = want => 'This order prints ' + (want.pages === 1 ? 'one side' : want.pages + ' sides') + ', so the rest of that design was left out. Change the order to more sides to keep it.';
 
 function demoJob() {
   const q = new URLSearchParams(location.search);
   const num = (k, d) => { const v = parseFloat(q.get(k)); return Number.isFinite(v) && v > 0 ? v : d; };
   const w = num('w', 9), h = num('h', 6), pages = Math.round(num('pages', 2));
-  if (q.get('product')) el.productName.textContent = q.get('product').slice(0, 60);
   const size = DEMO_SIZES.find(([l, s]) => l === Math.max(w, h) && s === Math.min(w, h));
   if (size) DEMO.size = size[0] + 'x' + size[1];
   DEMO.orientation = h > w ? 'portrait' : 'landscape';
@@ -376,6 +397,7 @@ let renderQueued = false;
 function refresh() {
   if (!S.d || !S.spec) return;
   readDocument();
+  scheduleAutosave();
   if (!renderQueued) {
     renderQueued = true;
     requestAnimationFrame(() => { renderQueued = false; renderPage(); draw(); placeTextEditor(); });
@@ -395,6 +417,10 @@ function readDocument() {
   // The engine's own preflight: characters its fonts can't draw, and photo resolution for photos
   // this page didn't place (a reopened design, an IDML file).
   try { S.preflight = (run('preflight.run') || {}).issues || []; } catch (e) { console.error(e); S.preflight = []; }
+  // Opacity isn't in document.inspect: the engine's Find Object answers which items are fully
+  // opaque, so a design reopened, an IDML file or an undone change reads true (a note kept by this
+  // page went stale on undo, and was empty for anything it hadn't set itself).
+  try { S.opaque = new Set((run('find.objects', { opacity: 1, select: false }) || {}).ids || []); } catch (e) { console.error(e); }
   for (const n of S.swatches) if (!S.swatchNames.has(n)) S.swatchNames.set(n, n);
   if (S.sel != null && !S.items.some(it => it.id === S.sel)) S.sel = null;
 }
@@ -568,8 +594,8 @@ function problemsOf(it) {
     if (st && st.overset) out.push(OVERSET_MSG);
     // The engine's PDF clips a see-through text frame's group to a box that misses the last
     // letter's overhang when tracking is negative (up to 11 pt at 60 pt, −200): the canvas shows
-    // it whole, the press doesn't. Opacity is known for what was set in this session.
-    if (S.opacity.has(it.id) && S.opacity.get(it.id) < 100) {
+    // it whole, the press doesn't.
+    if (!S.opaque.has(it.id)) {
       try { if (textRuns(it.id).runs.some(r => r.tracking < 0)) out.push(FADED_TIGHT_MSG); }
       catch (e) { console.error(e); }
     }
@@ -696,17 +722,17 @@ function openDrawer(cat, { toggle = false } = {}) {
   if (small && toggle && S.cat === cat && el.drawer.classList.contains('open')) { closeDrawer(); return; }
   S.cat = cat;
   document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== cat; });
-  document.querySelectorAll('.railbtn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cat === cat)));
+  document.querySelectorAll('.railbtn[data-cat]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cat === cat)));
   el.drawer.classList.add('open');
 }
 function closeDrawer() {
   el.drawer.classList.remove('open');
-  if (matchMedia('(max-width: 860px)').matches) document.querySelectorAll('.railbtn').forEach(b => b.setAttribute('aria-pressed', 'false'));
+  if (matchMedia('(max-width: 860px)').matches) document.querySelectorAll('.railbtn[data-cat]').forEach(b => b.setAttribute('aria-pressed', 'false'));
 }
 // On a phone the drawer covers the design, so it closes once something is added.
 function afterAdd() { if (matchMedia('(max-width: 860px)').matches) closeDrawer(); }
 
-document.querySelectorAll('.railbtn').forEach(b => b.addEventListener('click', () => openDrawer(b.dataset.cat, { toggle: true })));
+document.querySelectorAll('.railbtn[data-cat]').forEach(b => b.addEventListener('click', () => openDrawer(b.dataset.cat, { toggle: true })));
 
 // ── selecting, and the toolbar's actions ─────────────────────
 
@@ -1193,51 +1219,377 @@ function placePhoto(up, into) {
   }
 }
 
-// ── opening an InDesign (IDML) file ──────────────────────────
+// ── saving designs to come back to, and opening them again ───
+//
+// Three ways, all holding the same thing, the engine's own design file (photos included):
+//   - Saved automatically in this browser as the customer works, so a closed tab, a reload or a
+//     crash loses nothing. Each design has one automatic record, kept up to date; the latest
+//     AUTO_KEEP per product are kept. Reopening one carries on in the same record.
+//   - Saved by name in this browser (My designs), up to SAVED_MAX.
+//   - Downloaded as a file (.ppsdesign) to keep anywhere, and opened again on any device.
+// Storage is IndexedDB on this page's origin, which is the store's (the calculator frames this page
+// from its own site). Nothing leaves the device: the designer still never uploads (CLAUDE.md).
+
+const DB_NAME = 'pps-designer', DB_META = 'meta', DB_DATA = 'data';
+const SAVED_MAX = 30, AUTO_KEEP = 3, AUTOSAVE_MS = 1500;
+const FILE_EXT = '.ppsdesign';
+
+let dbOpen = null;
+function db() {
+  if (!dbOpen) {
+    dbOpen = new Promise((resolve, reject) => {
+      let r;
+      try { r = indexedDB.open(DB_NAME, 1); } catch (e) { reject(e); return; }
+      // Two stores: the small details a list needs (meta), and the design itself (data), so listing
+      // and tidying never read megabytes of photos.
+      r.onupgradeneeded = () => { r.result.createObjectStore(DB_META, { keyPath: 'id' }); r.result.createObjectStore(DB_DATA); };
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error || new Error('storage unavailable'));
+      r.onblocked = () => reject(new Error('storage blocked'));
+    });
+    dbOpen.catch(() => { dbOpen = null; });
+  }
+  return dbOpen;
+}
+
+// One transaction over both stores: fn(meta, data) issues requests; resolves with what `want` read.
+async function dbTx(mode, fn) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction([DB_META, DB_DATA], mode);
+    let out;
+    const req = fn(tx.objectStore(DB_META), tx.objectStore(DB_DATA));
+    if (req) req.onsuccess = () => { out = req.result; };
+    tx.oncomplete = () => resolve(out);
+    tx.onerror = () => reject(tx.error || new Error('storage error'));
+    tx.onabort = () => reject(tx.error || new Error('storage aborted'));
+  });
+}
+const dbMetas = () => dbTx('readonly', m => m.getAll()).then(a => a || []);
+const dbDesign = id => dbTx('readonly', (m, d) => d.get(id));
+function dbWrite(recs, dels = []) {
+  return dbTx('readwrite', (m, d) => {
+    for (const { design, ...meta } of recs) { m.put(meta); d.put(design, meta.id); }
+    for (const id of dels) { m.delete(id); d.delete(id); }
+  });
+}
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// A design's fingerprint (length and FNV-1a): which saved record holds exactly this design.
+function hashOf(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return str.length + ':' + (h >>> 0).toString(36);
+}
+// The undo history, the open document and the order's size as one stamp: equal stamps mean the
+// design is unchanged since the last automatic save.
+const docKey = () => JSON.stringify([docStamp(), S.docGen, S.spec && [S.spec.w, S.spec.h, S.spec.pages]]);
+const hasContent = () => (run('document.inspect').spreads || []).some(sp => (sp.items || []).length);
+const sidesText = n => (n === 1 ? '1 side' : n + ' sides');
+const sizeText = r => inch(r.w) + ' × ' + inch(r.h) + ' in, ' + sidesText(r.pages);
+const defaultName = () => S.product + ' design, ' + new Date().toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+function designThumb() {
+  try {
+    const scale = Math.min(1, 160 / (S.spec.w + 2 * S.spec.bleed));
+    const p = S.d.renderPage(0, scale, true);
+    const c = document.createElement('canvas');
+    c.width = p.width; c.height = p.height;
+    c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(p.rgba), p.width, p.height), 0, 0);
+    p.free();
+    return c.toDataURL('image/jpeg', 0.75);
+  } catch (e) { console.error(e); return ''; }
+}
+
+function record(id, name, auto, design) {
+  return { id, name, auto, product: S.product, w: S.spec.w, h: S.spec.h, pages: S.spec.pages, savedAt: Date.now(), thumb: designThumb(), hash: hashOf(design), design };
+}
+
+let storageWarned = false;
+function storageFailed(e) {
+  console.error(e);
+  if (storageWarned) return;
+  storageWarned = true;
+  const full = e && (e.name === 'QuotaExceededError' || /quota/i.test(String(e.message)));
+  toast(full ? 'This browser is out of room to keep your design. Use My designs › Download a copy to keep it.'
+    : 'This browser isn\'t keeping designs (a private window, or storage is turned off). Use My designs › Download a copy to keep yours.', 10000);
+  if (!full) S.storageOff = true;
+}
+
+// The automatic save. Runs AUTOSAVE_MS after the last change, before Back and Print hand the design
+// to the calculator, and before another design is opened; saves are queued so two never overlap.
+let autoTimer = 0, autoChain = Promise.resolve(true);
+function scheduleAutosave() {
+  if (S.storageOff) return;
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(() => { autoTimer = 0; autosave(); }, AUTOSAVE_MS);
+}
+// `design`, when given, is the design string about to be handed to the calculator: the record is
+// made to hold exactly it, so a later Edit design (which sends it back) finds its record by hash.
+function autosave(design) {
+  clearTimeout(autoTimer); autoTimer = 0;
+  autoChain = autoChain.then(() => autosaveNow(design), () => autosaveNow(design));
+  return autoChain;
+}
+async function autosaveNow(design) {
+  if (!S.d || !S.spec || S.storageOff) return false;
+  const key = docKey();
+  if (key === S.autoKey && (design == null || hashOf(design) === S.autoHash)) return true;
+  // A fresh design with nothing on it yet isn't worth a record (and must not push out a real one).
+  if (!S.autoId && !hasContent()) { S.autoKey = key; return true; }
+  try {
+    if (design == null) design = S.d.saveDesign();
+    const id = S.autoId || 'auto:' + uid();
+    const rec = record(id, 'Saved automatically', true, design);
+    const stale = (await dbMetas()).filter(m => m.auto && m.product === S.product && m.id !== id)
+      .sort((a, b) => b.savedAt - a.savedAt).slice(AUTO_KEEP - 1).map(m => m.id);
+    await dbWrite([rec], stale);
+    S.autoId = id; S.autoKey = key; S.autoHash = rec.hash;
+    if (!el.designs.hidden) renderSavedList();
+    return true;
+  } catch (e) { storageFailed(e); return false; }
+}
+// Before the page hands the design over and is closed: wait for the save, but not for long.
+const autosaveBriefly = design => Promise.race([autosave(design), new Promise(r => setTimeout(() => r(false), 2500))]);
+
+// Reopened from the calculator: the automatic save holding exactly this design is carried on.
+async function adoptAutosave(design) {
+  if (S.storageOff || typeof design !== 'string') return;
+  const gen = S.docGen, h = hashOf(design);
+  try {
+    const m = (await dbMetas()).find(x => x.auto && x.hash === h);
+    if (m && gen === S.docGen && !S.autoId) { S.autoId = m.id; S.autoHash = h; }
+  } catch (e) { console.warn('saved designs unavailable', e); }
+}
+
+// A fresh start, with a design saved here before for this product: offer it.
+async function offerResume() {
+  el.resume.hidden = true;
+  if (S.storageOff) return;
+  const gen = S.docGen;
+  let metas;
+  try { metas = await dbMetas(); } catch (e) { console.warn('saved designs unavailable', e); return; }
+  const last = metas.filter(m => m.product === S.product).sort((a, b) => b.savedAt - a.savedAt)[0];
+  // Nothing to offer, or the customer has already started (or opened something) meanwhile.
+  if (!last || gen !== S.docGen || S.dirty || hasContent()) return;
+  const when = new Date(last.savedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  el.resumeMsg.textContent = 'Carry on with your ' + (last.auto ? 'last design' : '“' + last.name + '”') + ' from ' + when + '?';
+  el.resume.dataset.id = last.id;
+  el.resume.hidden = false;
+}
+$('resumeOpen').addEventListener('click', async () => {
+  el.resume.hidden = true;
+  const m = (await dbMetas().catch(() => [])).find(x => x.id === el.resume.dataset.id);
+  if (m) openRecord(m); else toast('That design is no longer saved here.');
+});
+$('resumeAll').addEventListener('click', () => { el.resume.hidden = true; openDesigns(); });
+$('resumeNo').addEventListener('click', () => { el.resume.hidden = true; });
+
+async function saveNamed(name) {
+  flushText();
+  name = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 80) || defaultName();
+  if (S.storageOff) { toast('This browser isn\'t keeping designs. Download a copy instead.', 8000); return false; }
+  try {
+    const metas = await dbMetas();
+    const same = S.savedId && metas.find(m => m.id === S.savedId && !m.auto && m.name === name);
+    if (!same && metas.filter(m => !m.auto).length >= SAVED_MAX) {
+      toast('You have ' + SAVED_MAX + ' saved designs here, the most this browser keeps. Delete one you don\'t need, or download a copy.', 9000);
+      return false;
+    }
+    const id = same ? same.id : 'd:' + uid();
+    await dbWrite([record(id, name, false, S.d.saveDesign())]);
+    S.savedId = id; S.savedName = name;
+    toast('Saved “' + name + '” in this browser. Find it in My designs.');
+    if (!el.designs.hidden) renderSavedList();
+    return true;
+  } catch (e) { storageFailed(e); return false; }
+}
+
+function downloadDesign(design, name) {
+  const bin = atob(design);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (String(name || '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'design') + FILE_EXT;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+// Opens a saved design (a My designs record, or a file: .ppsdesign, or IDML from InDesign) in
+// place of the one open. What was open is saved automatically first, so nothing is lost.
+async function openDesignFrom(src) {
+  flushText(); closeTextEditor(); el.resume.hidden = true;
+  if (S.storageOff && S.dirty && hasContent() && !confirm('Opening this replaces your current design, and this browser can\'t keep a copy of it. Continue?')) return false;
+  if (!S.storageOff) await autosave();
+  const isIdml = !!src.idml;
+  let before = null;
+  try { before = S.d.saveDesign(); } catch (e) { console.error(e); }
+  let opened;
+  try {
+    opened = JSON.parse(src.bytes ? S.d.openFile(src.bytes, src.name) : S.d.openDesign(src.b64));
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    console.error(e);
+    if (msg.includes(INDD_UNSUPPORTED)) toast('That\'s an InDesign .indd file, which only InDesign can open. In InDesign choose File › Save As › InDesign Markup (IDML), then open the .idml file here.', 12000);
+    else if (/newer/i.test(msg)) toast('That design was saved by a newer version of this designer. Reload the page and try again.', 10000);
+    else toast('That file couldn\'t be opened. Open a design saved here (.ppsdesign), or an IDML file saved from InDesign.', 9000);
+    refresh();
+    return false;
+  }
+  const ins = run('document.inspect'), st = ins.settings || {};
+  const tol = isIdml ? 2 : 0.01;
+  const sameSize = Math.abs(st.pageWidth - S.spec.w) < tol && Math.abs(st.pageHeight - S.spec.h) < tol && ins.pageCount === S.spec.pages;
+  const desc = inch(st.pageWidth) + ' × ' + inch(st.pageHeight) + ' in with ' + sidesText(ins.pageCount);
+  const want = inch(S.spec.w) + ' × ' + inch(S.spec.h) + ' in with ' + sidesText(S.spec.pages);
+  if (!sameSize) {
+    // An InDesign layout isn't scaled (its type and spacing were set for its own size); a design
+    // made here can be: moved and scaled the way an order's size change does it.
+    if (isIdml) {
+      tryRun('file.close', { index: opened.index });
+      toast('That file is ' + desc + ', but this ' + (S.embedded ? 'order' : 'design') + ' is ' + want + '. Change the order to match, or open a file made for this size.', 12000);
+      refresh();
+      return false;
+    }
+    const fit = confirm('This design is ' + desc + '. ' + (S.embedded ? 'Your order' : 'This page') + ' is ' + want + '.\n\n' +
+      'OK: fit it to ' + (S.embedded ? 'your order' : 'this size') + ' (it is moved and scaled to fit).\n' +
+      'Cancel: leave it' + (S.embedded ? '. To keep its own size, change the size in Order options first, then open it again.' : '.'));
+    if (!fit) { tryRun('file.close', { index: opened.index }); refresh(); return false; }
+  }
+  resetLocalState();
+  S.undoFloor = 0;
+  S.resizeBase = null;
+  S.sizeChanged = false;
+  const order = S.spec;
+  if (sameSize) keepOnly(opened.index);
+  else {
+    try {
+      if (fitOpenedToOrder(order).dropped) toast(droppedMsg(order), 9000);   // leaves only the fitted design open
+    } catch (e) {
+      // Put back what was open: the design that couldn't be fitted must not print at its own size.
+      console.error(e);
+      S.spec = order;
+      if (before) keepOnly(JSON.parse(S.d.openDesign(before)).index);
+      S.docGen++;
+      S.autoKey = docKey();
+      layout();
+      toast('That design couldn\'t be fitted to this size, so your design is as it was.', 8000);
+      return false;
+    }
+  }
+  S.docGen++;
+  S.dirty = true;
+  // Carry on in the record it came from: its automatic save, or (for a named one) Save updates it.
+  S.autoId = src.record && src.record.auto ? src.record.id : null;
+  S.autoHash = src.record && src.record.auto ? src.record.hash : null;
+  S.savedId = src.record && !src.record.auto ? src.record.id : null;
+  S.savedName = S.savedId ? src.record.name : '';
+  S.autoKey = sameSize ? docKey() : null;
+  afterAdd();
+  layout();
+  if (isIdml) toast('Opened ' + src.name + '. Photos linked in the file may need uploading again.', 6000);
+  else toast('Opened ' + (src.record && !src.record.auto ? '“' + src.record.name + '”' : src.record ? 'your saved design' : src.name) + '.' + (S.storageOff ? '' : ' What you had before is in My designs.'), 6000);
+  return true;
+}
+
+async function openRecord(meta) {
+  let design;
+  try { design = await dbDesign(meta.id); } catch (e) { storageFailed(e); return; }
+  if (typeof design !== 'string' || !design) { toast('That design is no longer saved here.'); renderSavedList(); return; }
+  closeDesigns();
+  openDesignFrom({ b64: design, record: meta });
+}
 
 $('openFile').addEventListener('click', () => el.filePick.click());
+$('saveOpenFile').addEventListener('click', () => el.filePick.click());
 el.filePick.addEventListener('change', async () => {
   const file = el.filePick.files && el.filePick.files[0];
   el.filePick.value = '';
   if (!file) return;
-  if (S.dirty && !confirm('Opening this file replaces your current design. Continue?')) return;
   const bytes = new Uint8Array(await file.arrayBuffer());
-  let opened;
-  try {
-    opened = JSON.parse(S.d.openFile(bytes, file.name));
-  } catch (e) {
-    const msg = String(e && e.message || e);
-    if (msg.includes(INDD_UNSUPPORTED)) {
-      toast('That\'s an InDesign .indd file, which only InDesign can open. In InDesign choose File › Save As › InDesign Markup (IDML), then open the .idml file here.', 12000);
-    } else {
-      console.error(e);
-      toast('That file couldn\'t be opened. It needs to be an IDML file saved from InDesign.', 8000);
-    }
-    return;
-  }
-  // The calculator owns the size: a file built for a different size or page count is refused,
-  // and the design that was open stays.
-  const ins = run('document.inspect');
-  const st = ins.settings || {};
-  const fits = (a, b) => Math.abs(a - b) < 2;
-  const sameSize = (fits(st.pageWidth, S.spec.w) && fits(st.pageHeight, S.spec.h));
-  if (!sameSize || ins.pageCount !== S.spec.pages) {
-    tryRun('file.close', { index: opened.index });
-    const inch = v => +(v / 72).toFixed(2);
-    toast('That file is ' + inch(st.pageWidth) + ' × ' + inch(st.pageHeight) + ' in with ' + ins.pageCount + ' page' + (ins.pageCount === 1 ? '' : 's') +
-      ', but this order is ' + inch(S.spec.w) + ' × ' + inch(S.spec.h) + ' in with ' + S.spec.pages + '. Change the order to match, or open a file made for this size.', 12000);
-    refresh();
-    return;
-  }
-  keepOnly(opened.index);
-  resetLocalState();
-  S.undoFloor = 0;
-  S.resizeBase = null;
-  S.dirty = true;
-  afterAdd();
-  refresh();
-  toast('Opened ' + file.name + '. Photos linked in the file may need uploading again.', 6000);
+  // Both a saved design and an IDML package are zip files; IDML names its kind first, in plain text.
+  const head = new TextDecoder('latin1').decode(bytes.subarray(0, 120));
+  closeDesigns();
+  openDesignFrom({ bytes, name: file.name, idml: /indesign-idml-package/.test(head) || /\.idml$/i.test(file.name) });
 });
+
+// The My designs dialog.
+function openDesigns() {
+  flushText(); closeTextEditor(); closeColours();
+  el.saveName.value = S.savedName || defaultName();
+  el.designs.hidden = false;
+  renderSavedList();
+  // With a mouse, ready to type a name; on a phone the keyboard would cover the list, so the
+  // dialog's close button takes focus instead.
+  if (matchMedia('(hover: hover)').matches) { el.saveName.focus(); el.saveName.select(); } else $('designsClose').focus();
+}
+function closeDesigns() { el.designs.hidden = true; }
+$('railSave').addEventListener('click', openDesigns);
+$('toolSave').addEventListener('click', openDesigns);
+$('designsClose').addEventListener('click', closeDesigns);
+el.designs.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closeDesigns(); } });
+el.designs.addEventListener('click', e => { if (e.target === el.designs) closeDesigns(); });
+$('saveForm').addEventListener('submit', e => { e.preventDefault(); saveNamed(el.saveName.value); });
+$('saveDownload').addEventListener('click', () => {
+  flushText();
+  try { downloadDesign(S.d.saveDesign(), el.saveName.value.trim() || S.savedName || defaultName()); }
+  catch (e) { console.error(e); toast('The design file could not be made. Please try again.'); }
+});
+
+async function renderSavedList() {
+  let metas;
+  try { metas = await dbMetas(); } catch (e) {
+    el.savedList.textContent = '';
+    el.savedNote.textContent = 'This browser isn\'t keeping designs (a private window, or storage is turned off). Download a copy to keep yours, and open it here later.';
+    $('saveHere').disabled = true;
+    return;
+  }
+  $('saveHere').disabled = S.storageOff;
+  // This product's designs first, newest first.
+  metas.sort((a, b) => (b.product === S.product) - (a.product === S.product) || b.savedAt - a.savedAt);
+  el.savedList.textContent = '';
+  if (!metas.length) {
+    const li = document.createElement('li'); li.className = 'empty';
+    li.textContent = 'Nothing saved here yet. Your work is saved automatically as you go, and Save keeps a copy by name.';
+    el.savedList.appendChild(li);
+    return;
+  }
+  for (const m of metas) {
+    const li = document.createElement('li');
+    const current = m.id === S.autoId || m.id === S.savedId;
+    li.classList.toggle('current', current);
+    const img = document.createElement('img'); img.alt = ''; if (m.thumb) img.src = m.thumb;
+    const info = document.createElement('div');
+    const nm = document.createElement('div'); nm.className = 'sname';
+    nm.textContent = (m.auto ? 'Saved automatically' : m.name) + (current ? ' (open now)' : '');
+    const meta = document.createElement('div'); meta.className = 'smeta';
+    meta.textContent = (m.product !== S.product ? m.product + ' · ' : '') + sizeText(m) + ' · ' +
+      new Date(m.savedAt).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    info.append(nm, meta);
+    const acts = document.createElement('div'); acts.className = 'sacts';
+    const mk = (label, aria, fn, cls = '') => {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn ' + cls; b.textContent = label;
+      b.setAttribute('aria-label', aria + ': ' + nm.textContent); b.addEventListener('click', fn); acts.appendChild(b); return b;
+    };
+    mk('Open', 'Open', () => openRecord(m), 'strong');
+    mk('Download', 'Download a copy of', async () => {
+      try { const d = await dbDesign(m.id); if (d) downloadDesign(d, m.auto ? S.product + ' design ' + new Date(m.savedAt).toISOString().slice(0, 10) : m.name); }
+      catch (e) { storageFailed(e); }
+    });
+    mk('Delete', 'Delete', async () => {
+      if (!confirm('Delete “' + nm.textContent.replace(/ \(open now\)$/, '') + '” from this browser? This can\'t be undone.')) return;
+      try {
+        await dbWrite([], [m.id]);
+        if (m.id === S.autoId) { S.autoId = null; S.autoHash = null; S.autoKey = docKey(); }
+        if (m.id === S.savedId) { S.savedId = null; S.savedName = ''; }
+        renderSavedList();
+      } catch (e) { storageFailed(e); }
+    }, 'danger');
+    li.append(img, info, acts);
+    el.savedList.appendChild(li);
+  }
+}
 
 // ── tapping and dragging on the design ───────────────────────
 
@@ -1377,6 +1729,18 @@ function redo() {
 document.addEventListener('keydown', e => {
   const typing = /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
   const mod = e.ctrlKey || e.metaKey;
+  // A dialog open (the print check, My designs) has the keys: Delete or an arrow mustn't change the
+  // design behind it.
+  if (!el.sheet.hidden || !el.designs.hidden) {
+    if (e.key === 'Escape') { el.sheet.hidden = true; closeDesigns(); }
+    return;
+  }
+  // Ctrl+S: save again under the name it was saved as, or open My designs to name it.
+  if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    if (S.d && S.spec) { if (S.savedId) saveNamed(S.savedName); else openDesigns(); }
+    return;
+  }
   if (mod && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (typing) return;
   if (S.mode === 'adv') {
@@ -1452,7 +1816,7 @@ function doPrint() {
   const go = $('sheetGo');
   const label = go.textContent;
   go.disabled = true; go.textContent = 'Preparing your print file…';
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
       const pdf = S.d.exportPdf(JSON.stringify({ bleed: true, standard: 'x4' }));
       const design = S.d.saveDesign();
@@ -1464,7 +1828,10 @@ function doPrint() {
       };
       if (S.embedded) {
         const buf = pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength);
-        post('pps-design:print', { pdf: buf, design, thumbs: thumbs(), manifest }, [buf]);
+        const shots = thumbs();
+        // Kept here as well, so the design is in My designs if the order page is closed or reloaded.
+        await autosaveBriefly(design);
+        post('pps-design:print', { pdf: buf, design, thumbs: shots, manifest }, [buf]);
         S.dirty = false;
       } else {
         const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
@@ -1473,6 +1840,7 @@ function doPrint() {
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
         S.dirty = false;
+        autosave(design);
         toast('Your print file has downloaded. In a real order it would go to the proof next.');
       }
       el.sheet.hidden = true;
@@ -1485,16 +1853,29 @@ function doPrint() {
   }, 30);
 }
 
-el.back.addEventListener('click', () => {
-  if (S.embedded) {
-    let design = null;
-    try { design = S.d && S.spec ? S.d.saveDesign() : null; } catch (e) { console.error(e); }
-    post('pps-design:close', { design });
-  } else if (!S.dirty || confirm('Leave the designer? Your design isn\'t saved.')) {
-    history.length > 1 ? history.back() : (location.href = '../');
-  }
+el.back.addEventListener('click', async () => {
+  if (el.back.disabled) return;
+  flushText();
+  el.back.disabled = true;
+  try {
+    if (S.embedded) {
+      let design = null;
+      try { design = S.d && S.spec ? S.d.saveDesign() : null; } catch (e) { console.error(e); }
+      if (design) await autosaveBriefly(design);
+      post('pps-design:close', { design });
+    } else {
+      const kept = S.d && S.spec && !S.storageOff && await autosaveBriefly();
+      if (kept || !S.dirty || confirm('Leave the designer? Your design isn\'t saved.')) history.length > 1 ? history.back() : (location.href = '../');
+    }
+  } finally { el.back.disabled = false; }
 });
-window.addEventListener('beforeunload', e => { if (!S.embedded && S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+// Standalone, closing the tab with changes not yet saved here asks first (embedded, the calculator
+// page owns leaving).
+window.addEventListener('beforeunload', e => {
+  if (S.embedded || !S.d || !S.spec) return;
+  const unsaved = S.storageOff ? S.dirty : docKey() !== S.autoKey;
+  if (unsaved) { e.preventDefault(); e.returnValue = ''; }
+});
 
 // ── Advanced Mode: InDesign's print workspace, over the same document ──
 
@@ -1657,7 +2038,7 @@ function updateControl() {
   el.ctlFill.closest('.ctl').dataset.tip = isText(it) ? 'Text colour' : 'Fill swatch';
   swatchSelect(el.ctlStroke, it.stroke && it.stroke.swatch); paintChip(el.ctlStrokeChip, it.stroke && it.stroke.swatch);
   setIfIdle(el.ctlWeight, it.stroke ? +(+it.stroke.weight || 0).toFixed(2) : 0);
-  setIfIdle(el.ctlOpacity, S.opacity.has(it.id) ? S.opacity.get(it.id) : 100);
+  setIfIdle(el.ctlOpacity, opacityPct(it.id));
   for (const inp of [el.ctlX, el.ctlY, el.ctlW, el.ctlH, el.ctlRot]) inp.disabled = !!it.locked || isBackground(it);
   if (attrs) {
     if (document.activeElement !== el.ctlFont) el.ctlFont.value = ch.fontFamily in FAMILIES ? ch.fontFamily : '';
@@ -1722,6 +2103,18 @@ el.ctlWeight.addEventListener('change', () => {
   if (w > 0 && (!it.stroke || it.stroke.swatch === '[None]')) p.swatch = '[Black]';
   if (tryRun('object.stroke', p, 'That stroke could not be set.') !== undefined) changed();
 });
+
+// An item's opacity in percent, read back from the engine: 100 when Find Object lists it as opaque,
+// else the value it answers to (the last one set here first, then each whole percent), or blank
+// for a value set elsewhere that is none of those.
+function opacityPct(id) {
+  if (S.opaque.has(id)) return 100;
+  const at = pc => { try { return ((run('find.objects', { opacity: pc / 100, select: false }) || {}).ids || []).includes(id); } catch { return false; } };
+  const hint = S.opacity.get(id);
+  if (hint != null && at(hint)) return hint;
+  for (let pc = 99; pc >= 0; pc--) if (at(pc)) { S.opacity.set(id, pc); return pc; }
+  return '';
+}
 
 el.ctlOpacity.addEventListener('change', () => {
   const it = selected(), v = num(el.ctlOpacity);
@@ -2125,6 +2518,7 @@ function resizeDocument(next) {
   if (locked.length) run('object.setFlags', { ids: locked, locked: true });
   keepOnly(JSON.parse(S.d.openDesign(S.d.saveDesign())).index);
   S.resizeBase.stamp = docStamp();
+  S.docGen++;
   S.spec = next;
   updateLegend();
   el.productSize.textContent = inch(next.w) + ' × ' + inch(next.h) + ' in';
@@ -2278,6 +2672,10 @@ new ResizeObserver(() => layout()).observe(el.stage);
 // ── start ────────────────────────────────────────────────────
 
 (async () => {
+  // The product, as the calculator names it when it opens this page (?product=Postcard).
+  const product = (new URLSearchParams(location.search).get('product') || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 60);
+  if (product) el.productName.textContent = product;
+  S.product = el.productName.textContent.trim() || 'Design';
   buildSwatches();
   let saved = 'simple';
   try { saved = localStorage.getItem(MODE_KEY) === 'adv' ? 'adv' : 'simple'; } catch { /* no storage: Simple */ }

@@ -34,6 +34,12 @@
     </header>
 
     <div id="demo" class="demo" hidden>Preview only: this design isn't connected to an order. “Print” downloads the print file.</div>
+    <div id="resume" class="resume" hidden role="status">
+      <span id="resumeMsg"></span>
+      <button id="resumeOpen" class="btn primary" type="button">Open it</button>
+      <button id="resumeAll" class="btn" type="button">My designs</button>
+      <button id="resumeNo" class="btn ghost" type="button" aria-label="No thanks, start fresh">✕</button>
+    </div>
 
     <main class="work">
       <nav id="tools" class="tools" aria-label="Tools">
@@ -59,7 +65,10 @@
         <button id="toolPlace" class="tool" type="button" aria-label="Place a photo" data-tip="Place (Ctrl+D): add a photo or logo" data-tip-pos="right">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="M4 18l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
-        <button id="toolOpen" class="tool" type="button" aria-label="Open an IDML file" data-tip="Open an InDesign (IDML) file. It replaces this design." data-tip-pos="right">
+        <button id="toolSave" class="tool" type="button" aria-label="My designs: save, download or open" data-tip="My designs (Ctrl+S): save this design to come back to, download a copy, or open one you saved" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11l3 3v13H5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8 4v5h7V4M8 20v-6h8v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button id="toolOpen" class="tool" type="button" aria-label="Open a design file" data-tip="Open a design you saved (.ppsdesign) or an InDesign (IDML) file. It replaces this design." data-tip-pos="right">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
       </nav>
@@ -77,6 +86,9 @@
         <button class="railbtn" data-cat="background" type="button" data-tip="Colour the whole side, edge to edge" data-tip-pos="right">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="currentColor" opacity=".25"/><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 16l6-5 5 4 7-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg><span>Background</span>
         </button>
+        <button id="railSave" class="railbtn" type="button" data-tip="Save your design to come back to later, download a copy, or open one you saved" data-tip-pos="right">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11l3 3v13H5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8 4v5h7V4M8 20v-6h8v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg><span>My designs</span>
+        </button>
       </nav>
 
       <aside class="drawer" id="drawer" aria-live="polite">
@@ -93,11 +105,11 @@
           <p class="hint">Big, sharp photos print best. Your uploads appear here so you can add them again.</p>
           <div id="uploads" class="uploads"></div>
           <div class="openfile">
-            <p class="hint"><strong>Have an InDesign design?</strong> Open it as IDML (in InDesign: File › Save As › InDesign Markup).</p>
-            <button id="openFile" class="btn wide" type="button" data-tip="Open an IDML file made in InDesign. It replaces this design.">Open an InDesign (IDML) file</button>
+            <p class="hint"><strong>Have a design file?</strong> Open one you saved here (.ppsdesign), or an InDesign design saved as IDML (in InDesign: File › Save As › InDesign Markup).</p>
+            <button id="openFile" class="btn wide" type="button" data-tip="Open a design you saved, or an IDML file made in InDesign. It replaces this design.">Open a design file</button>
           </div>
           <input id="photoPick" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
-          <input id="filePick" type="file" accept=".idml,.indd,.indt,.designcraft" hidden>
+          <input id="filePick" type="file" hidden>
         </section>
         <section data-panel="shapes" hidden>
           <h2>Shapes</h2>
@@ -290,6 +302,28 @@
           <button id="sheetCancel" class="btn big" type="button">Keep designing</button>
           <button id="sheetGo" class="btn primary huge" type="button">Looks good, continue</button>
         </div>
+      </div>
+    </div>
+
+    <div id="designs" class="sheet" hidden>
+      <div class="sheet-card designs-card" role="dialog" aria-modal="true" aria-labelledby="designsTitle">
+        <div class="row between">
+          <h2 id="designsTitle">My designs</h2>
+          <button id="designsClose" class="btn ghost" type="button" aria-label="Close">✕</button>
+        </div>
+        <form id="saveForm" class="save-form" autocomplete="off">
+          <label for="saveName">Save this design as</label>
+          <div class="row nowrap">
+            <input id="saveName" type="text" maxlength="80" spellcheck="false">
+            <button id="saveHere" class="btn primary big" type="submit">Save</button>
+          </div>
+        </form>
+        <div class="row">
+          <button id="saveDownload" class="btn big" type="button" data-tip="A file to keep on your computer or phone. Open it here any time, on any device.">Download a copy</button>
+          <button id="saveOpenFile" class="btn big" type="button" data-tip="Open a design you downloaded (.ppsdesign), or an InDesign IDML file">Open a design file</button>
+        </div>
+        <p id="savedNote" class="hint">Designs saved here stay in this browser on this device, and your latest work is saved automatically. Download a copy to keep it anywhere or open it on another device.</p>
+        <ul id="savedList" class="saved-list" aria-label="Saved designs"></ul>
       </div>
     </div>
 

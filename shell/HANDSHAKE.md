@@ -98,3 +98,20 @@ same either way, so the calculator keeps it out of its own fields and only chang
 
 **Standalone.** Opened without a calculator (the preview), the designer plays the calculator's
 part with a few demo sizes and no prices.
+
+## Designs kept in the browser (My designs)
+
+The designer keeps the customer's designs on this origin, in IndexedDB database `pps-designer`
+(stores `meta` and `data`): one automatic record per design, kept up to date as they work (the
+latest three per product), plus any they save by name (up to 30). Before it posts
+`pps-design:print` or `pps-design:close`, the record is made to hold exactly the `design` string it
+sends, so when the calculator sends that string back in a `pps-design:job` (Edit design) the
+designer carries on in the same record instead of starting another. A fresh job (no `design`)
+offers the latest design saved for that `?product=`. Nothing is uploaded; the calculator needs to
+do nothing for this, and the `design` string it receives is unchanged.
+
+Customers can also download a design as a `.ppsdesign` file (the engine's own `.designcraft`
+format: a zip holding the document and its photos) and open it again from My designs or the Photos
+drawer, on any device. A design of another size or page count is fitted to the order after the
+customer agrees; an IDML file of another size is refused, as before.
+
