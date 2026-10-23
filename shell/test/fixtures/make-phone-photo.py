@@ -15,3 +15,8 @@ exif = Image.Exif()
 exif[274] = 6
 shown.rotate(90, expand=True).save('shell/test/fixtures/phone-exif6.jpg', quality=92, exif=exif.tobytes())
 shown.convert('CMYK').save('shell/test/fixtures/print-cmyk.jpg', quality=90)
+
+# phone-48mp-like.jpg: an 8000 x 6000 photo (48 MP, as recent phones take), a plain gradient so the
+# file stays small. Far more than a postcard can use: the designer scales it down when placing it.
+from PIL import Image
+Image.linear_gradient('L').resize((8000, 6000)).convert('RGB').save('shell/test/fixtures/phone-48mp-like.jpg', quality=40)
