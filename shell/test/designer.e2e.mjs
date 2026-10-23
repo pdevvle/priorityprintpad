@@ -793,6 +793,25 @@ const errors = [];
   await page.click('#undo');
   ok('one Undo takes back Add a square', await page.isVisible('#emptyHint'));
 
+  // A web address too wide for its line is named; a phone-sized photo is placed at what the card can use.
+  await page.click('.railbtn[data-cat="text"]');
+  await page.click('[data-text="heading"]');
+  await page.fill('#textInput', 'www.priorityprintservice.com/spring-sale-2026');
+  await page.click('#textDone');
+  await page.waitForTimeout(300);
+  const wwarn = await page.locator('#warnings div').allTextContents();
+  ok('a web address split across lines with no hyphen is named', wwarn.some(t => /priorityprint.*too long for one line/.test(t)), JSON.stringify(wwarn));
+  await page.click('#undo');
+  await page.click('.railbtn[data-cat="photos"]');
+  await page.setInputFiles('#photoPick', { name: 'big-phone.jpg', mimeType: 'image/jpeg', buffer: await readFile(path.join(HERE, 'fixtures', 'phone-48mp-like.jpg')) });
+  await page.waitForTimeout(1500);
+  const big = await printPdf();
+  // Image widths in the PDF (fonts carry /Widths, not /Width).
+  const widths = [...big.toString('latin1').matchAll(/\/Width\s+(\d+)/g)].map(m => +m[1]);
+  ok('a photo far bigger than the card can use is scaled to 600 per inch of the card with its bleed (9.25 in: 5 550 px, not 8 000)', widths.length >= 1 && Math.max(...widths) === 5550, JSON.stringify(widths));
+  await page.click('#undo');
+  await page.click('.railbtn[data-cat="text"]');
+
   // Smaller never makes small text bigger; Enter on a focused button presses it.
   await page.click('.railbtn[data-cat="text"]');
   await page.click('[data-text="body"]');

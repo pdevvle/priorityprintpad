@@ -107,6 +107,7 @@ const S = {
   opacity: new Map(),    // item id → opacity % last set or read here: a hint for reading it back (opacityPct)
   opaque: new Set(),     // ids of items at 100% opacity, read from the engine at each refresh
   noPrint: new Set(),    // ids of items that won't print (layer hidden or non-printing, or Nonprinting)
+  broken: new Map(),     // text frame id → words split across two lines with no hyphen
   options: [],           // Order options from the calculator: [{key, label, type, value, choices?, min?, max?, step?, help?}]
   lastOption: null,      // {key, prev}: the change waiting on the calculator, to put back if refused
   price: null,           // the last price the calculator sent (display only)
@@ -467,6 +468,12 @@ function readDocument() {
   // Items on a hidden or non-printing layer, or marked Nonprinting (an InDesign file can have all
   // three), aren't drawn (the engine renders what prints) and aren't on the design to tap or check.
   try { S.noPrint = new Set(typeof S.d.notPrinting === 'function' ? JSON.parse(S.d.notPrinting()) : []); } catch (e) { console.error(e); S.noPrint = new Set(); }
+  // Words too wide for their line, split with no hyphen (frame id → the words).
+  S.broken = new Map();
+  try {
+    for (const { frame, word } of (typeof S.d.brokenWords === 'function' ? JSON.parse(S.d.brokenWords()) : []))
+      S.broken.set(frame, [...(S.broken.get(frame) || []), word]);
+  } catch (e) { console.error(e); }
   S.allItems = sp.items || [];
   S.items = S.allItems.filter(it => !it.hidden && !S.noPrint.has(it.id));
   S.stories = new Map((ins.stories || []).map(s => [s.id, s]));
@@ -649,6 +656,10 @@ function problemsOf(it) {
       out.push('Some words are outside the green dashed line and could be cut off.');
     const st = S.stories.get(it.story);
     if (st && st.overset) out.push(OVERSET_MSG);
+    // A word wider than its line is split wherever it must be, with no hyphen: a web address or an
+    // email then prints as two words. The design shows it, but it is easy to read past.
+    const split = S.broken.get(it.id);
+    if (split && split.length) out.push('“' + split[0] + '” is too long for one line, so it is split in two with no hyphen. Make the words smaller or the box wider.');
     // The engine's PDF clips a see-through text frame's group to a box that misses the last
     // letter's overhang when tracking is negative (up to 11 pt at 60 pt, −200): the canvas shows
     // it whole, the press doesn't.
@@ -1211,15 +1222,18 @@ el.photoPick.addEventListener('change', async () => {
   let bmp;
   try { bmp = await decodePhoto(file); }
   catch { toast('That file isn\'t a photo this designer can use. Try a JPEG or PNG.'); return; }
-  let bytes = new Uint8Array(await file.arrayBuffer()), name = file.name;
+  let bytes = new Uint8Array(await file.arrayBuffer()), name = file.name, dims = [bmp.width, bmp.height];
   // A phone stores a photo taken upright as a sideways picture plus an EXIF note to turn it; the
   // engine places the pixels as stored, so the photo would print on its side. The browser has
-  // already turned it: keep that version.
-  if (jpegOrientation(bytes) > 1) {
-    try { bytes = await encodePhoto(bmp); name = name.replace(/\.[^.]*$/, '') + '.jpg'; }
+  // already turned it: keep that version. A JPEG far bigger than the card can use is scaled down
+  // to what it can (photoCapPx); CMYK JPEGs keep their inks and other formats their transparency.
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
+  const cap = isJpeg && !jpegIsCmyk(bytes) && Math.max(bmp.width, bmp.height) > photoCapPx() ? photoCapPx() : 0;
+  if (jpegOrientation(bytes) > 1 || cap) {
+    try { ({ bytes, dims } = await encodePhoto(bmp, cap)); name = name.replace(/\.[^.]*$/, '') + '.jpg'; }
     catch (e) { console.error(e); }
   }
-  const up = { name, bytes, dims: [bmp.width, bmp.height], url: URL.createObjectURL(file), bmp };
+  const up = { name, bytes, dims, url: URL.createObjectURL(file), bmp };
   // A CMYK JPEG prints as its own inks (right), but the screen shows it far brighter than it
   // prints: the customer is told once, so a blue that looks electric isn't a surprise on paper.
   if (jpegIsCmyk(bytes)) setTimeout(() => toast('This photo is saved in print colours (CMYK). The screen shows it brighter than it will print; the printed colours will be those in the file.', 9000), 600);
@@ -1233,13 +1247,29 @@ async function decodePhoto(file) {
   catch { return await createImageBitmap(file); }
 }
 
-// The photo as the browser shows it, as a high-quality JPEG.
-async function encodePhoto(bmp) {
+// The most pixels across a photo's long side the card could use: 600 per inch over the card's
+// long side with its bleed (presses resolve about 300). A phone's 24 or 48 MP photo is several
+// times that, and the engine holds every photo decoded (and every version undo can return to), so
+// a few of them ran a phone out of memory. 12 MP photos on a postcard are left about as they are.
+const PHOTO_PPI_CAP = 600;
+function photoCapPx() {
+  if (!S.spec) return Infinity;
+  return Math.ceil((Math.max(S.spec.w, S.spec.h) + 2 * S.spec.bleed) / 72 * PHOTO_PPI_CAP);
+}
+
+// The photo as the browser shows it, as a high-quality JPEG, at most `maxLong` pixels on its long
+// side when that is given: {bytes, dims}.
+async function encodePhoto(bmp, maxLong = 0) {
+  const k = maxLong > 0 ? Math.min(1, maxLong / Math.max(bmp.width, bmp.height)) : 1;
   const c = document.createElement('canvas');
-  c.width = bmp.width; c.height = bmp.height;
-  c.getContext('2d').drawImage(bmp, 0, 0);
+  c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+  const g = c.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(bmp, 0, 0, c.width, c.height);
   const blob = await new Promise((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error('photo could not be encoded'))), 'image/jpeg', 0.95));
-  return new Uint8Array(await blob.arrayBuffer());
+  const out = { bytes: new Uint8Array(await blob.arrayBuffer()), dims: [c.width, c.height] };
+  c.width = c.height = 0;   // frees the canvas now, not at the next collection
+  return out;
 }
 
 // Whether a JPEG holds four colour channels (CMYK, from a print-ready export).
@@ -1305,7 +1335,7 @@ function placePhoto(up, into) {
       if (up.reencoded || !up.bmp) throw e;
       if (created) tryRun('edit.clear', { ids: [id] });
       up.reencoded = true;
-      encodePhoto(up.bmp).then(b => { up.bytes = b; up.name = up.name.replace(/\.[^.]*$/, '') + '.jpg'; placePhoto(up, into); })
+      encodePhoto(up.bmp, photoCapPx()).then(r => { up.bytes = r.bytes; up.dims = r.dims; up.name = up.name.replace(/\.[^.]*$/, '') + '.jpg'; placePhoto(up, into); })
         .catch(err => { console.error(err); toast('That photo could not be added. Try a smaller JPEG or PNG.'); });
       return;
     }

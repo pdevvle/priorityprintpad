@@ -109,6 +109,44 @@ impl Bridge {
         }
     }
 
+    /// Words split across two lines with no hyphen, because one word is wider than its line (a
+    /// web address or an email at headline size): `[{frame, word}]`. The composer breaks such a word
+    /// wherever it must, and the printed card reads as two words; the designer says so. A break at a
+    /// space, a hyphen, a slash or a forced line break is not one of these.
+    pub fn broken_words(&self) -> Result<Value, String> {
+        let st = self.session.doc().map_err(|e| format!("brokenWords: {e}"))?;
+        let d = &st.doc;
+        let mut out = Vec::new();
+        for (sid, story) in &d.stories {
+            let text = &story.text;
+            let composed = self.session.cache.get(d, *sid, None);
+            for frame in &composed.frames {
+                for line in &frame.lines {
+                    let end = line.range.end;
+                    if line.last_in_para || line.hyphenated || end <= line.range.start {
+                        continue;
+                    }
+                    let (Some(before), Some(after)) =
+                        (text.get(..end).and_then(|t| t.chars().next_back()), text.get(end..).and_then(|t| t.chars().next()))
+                    else {
+                        continue;
+                    };
+                    if !before.is_alphanumeric() || !after.is_alphanumeric() {
+                        continue;
+                    }
+                    let start = text
+                        .get(..end)
+                        .and_then(|t| t.char_indices().rev().find(|(_, c)| c.is_whitespace()).map(|(i, c)| i + c.len_utf8()))
+                        .unwrap_or(0);
+                    let stop = text.get(end..).map_or(end, |t| end + t.find(char::is_whitespace).unwrap_or(t.len()));
+                    let word: String = text.get(start..stop).unwrap_or("").chars().take(80).collect();
+                    out.push(json!({"frame": frame.frame.0, "word": word}));
+                }
+            }
+        }
+        Ok(json!(out))
+    }
+
     /// Items on the pages that won't print: on a hidden or non-printing layer, or marked
     /// Nonprinting (an InDesign file can have all three). The canvas leaves them out, as the PDF does.
     pub fn not_printing(&self) -> Result<Value, String> {
@@ -360,6 +398,12 @@ impl Designer {
         self.inner.end_step();
     }
 
+    /// Words split across lines with no hyphen, as `[{frame, word}]` (JSON).
+    #[wasm_bindgen(js_name = brokenWords)]
+    pub fn broken_words(&self) -> Result<String, JsError> {
+        self.inner.broken_words().map(|v| v.to_string()).map_err(js)
+    }
+
     /// Ids of the items on the pages that won't print (JSON array).
     #[wasm_bindgen(js_name = notPrinting)]
     pub fn not_printing(&self) -> Result<String, JsError> {
@@ -523,6 +567,34 @@ mod tests {
         assert_eq!(frames, 2);
         // Nothing placed: nothing to leave out, and the design still saves.
         assert!(postcard().save_design().is_ok());
+    }
+
+    #[test]
+    fn a_word_wider_than_its_line_is_named() {
+        let mut b = postcard();
+        // 60 pt across a 2 in frame: the address can't fit on one line and is broken mid-word.
+        let f = b
+            .execute("frame.create", r#"{"spread":0,"rect":[36,36,180,300],"content":"text","text":"Visit www.priorityprintservice.com today"}"#)
+            .unwrap();
+        let id = f["id"].as_u64().unwrap();
+        b.execute("selection.set", &format!(r#"{{"ids":[{id}]}}"#)).unwrap();
+        b.execute("type.char", r#"{"attrs":{"size":40}}"#).unwrap();
+        b.execute("type.para", r#"{"attrs":{"hyphenate":false}}"#).unwrap();
+        let v = b.broken_words().unwrap();
+        let words: Vec<&str> = v.as_array().unwrap().iter().filter(|w| w["frame"] == json!(id)).filter_map(|w| w["word"].as_str()).collect();
+        assert!(words.contains(&"www.priorityprintservice.com"), "{v}");
+        // Ordinary words that wrap at spaces are not named.
+        let g = b
+            .execute(
+                "frame.create",
+                r#"{"spread":0,"rect":[200,36,560,300],"content":"text","text":"Grand opening on Saturday with music and food for everyone"}"#,
+            )
+            .unwrap();
+        let gid = g["id"].as_u64().unwrap();
+        b.execute("selection.set", &format!(r#"{{"ids":[{gid}]}}"#)).unwrap();
+        b.execute("type.char", r#"{"attrs":{"size":24}}"#).unwrap();
+        b.execute("type.para", r#"{"attrs":{"hyphenate":false}}"#).unwrap();
+        assert!(!b.broken_words().unwrap().as_array().unwrap().iter().any(|w| w["frame"] == json!(gid)));
     }
 
     #[test]
